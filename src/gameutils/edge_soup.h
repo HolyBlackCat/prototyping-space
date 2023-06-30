@@ -11,7 +11,7 @@
 #include "utils/alignment.h"
 #include "utils/mat.h"
 
-#define IMP_CONTOUR_DEBUG(...) // (std::cout << FMT(__VA_ARGS__) << '\n')
+#define IMP_EDGESOUP_DEBUG(...) // (std::cout << FMT(__VA_ARGS__) << '\n')
 
 // Represents a 2D contour.
 // The edges are stored independently* of each other, in an AABB tree.
@@ -217,6 +217,16 @@ class EdgeSoup
         return aabb_tree;
     }
 
+    // Returns the radius enclosing all edges, of a circle centered at the local origin.
+    [[nodiscard]] scalar EnclosingRadius() const
+    {
+        rect bounds = Bounds();
+        scalar sq = bounds.corner(0).len_sq();
+        for (int i = 1; i < 3; i++)
+            clamp_var_min(sq, bounds.corner(i).len_sq());
+        return sqrt(sq);
+    }
+
     // Performs collision tests on points.
     class PointCollider
     {
@@ -240,12 +250,12 @@ class EdgeSoup
         // Returns true if the point is inside the shape, or is exactly on the boundary.
         [[nodiscard]] bool CollidePoint(vector point) const
         {
-            IMP_CONTOUR_DEBUG("------------------------------- shape to point collision test:");
+            IMP_EDGESOUP_DEBUG("------------------------------- shape to point collision test:");
 
             rect bounds = target->Bounds();
             if (!bounds.contains(point))
             {
-                IMP_CONTOUR_DEBUG("-----> not in the bounding box");
+                IMP_EDGESOUP_DEBUG("-----> not in the bounding box");
                 return false; // We're outside of the bounds, abort early.
             }
 
@@ -267,7 +277,7 @@ class EdgeSoup
                 int b_side_sign = sign(edge.b[!ray_vertical] - point[!ray_vertical]);
                 if (a_side_sign == b_side_sign)
                 {
-                    IMP_CONTOUR_DEBUG("edge {} doesn't cross the ray line", edge_index_raw);
+                    IMP_EDGESOUP_DEBUG("edge {} doesn't cross the ray line", edge_index_raw);
                     return false;
                 }
 
@@ -282,11 +292,11 @@ class EdgeSoup
                 {
                     int delta = (bool(a_side_sign) + bool(b_side_sign)) * (ray_exits_shape ? 1 : -1);
                     counter += delta;
-                    IMP_CONTOUR_DEBUG("edge {} PASSES precise collision: {:+}", edge_index_raw, delta);
+                    IMP_EDGESOUP_DEBUG("edge {} PASSES precise collision: {:+}", edge_index_raw, delta);
                     return false;
                 }
 
-                IMP_CONTOUR_DEBUG("edge {} fails precise collision (sign = {:+})", edge_index_raw, ray_exits_shape ? 1 : -1);
+                IMP_EDGESOUP_DEBUG("edge {} fails precise collision (sign = {:+})", edge_index_raw, ray_exits_shape ? 1 : -1);
 
                 return false;
             });
@@ -299,8 +309,8 @@ class EdgeSoup
             // This holds even if the geometry has holes.
             ASSERT(counter == 0 || counter == 1 || counter == 2 || counter == 3, "Bad contour geometry, or broken algorithm.");
 
-            IMP_CONTOUR_DEBUG("// counter = {}", counter);
-            IMP_CONTOUR_DEBUG("-----> {}",
+            IMP_EDGESOUP_DEBUG("// counter = {}", counter);
+            IMP_EDGESOUP_DEBUG("-----> {}",
                 counter == 0 ? "no collision" :
                 counter == 1 ? "TANGENT collision" :
                 counter == 2 ? "COLLISION" :
@@ -438,6 +448,9 @@ class EdgeSoup
 
             if constexpr (!std::is_null_pointer_v<EndF>)
             {
+                if (first)
+                    IMP_EDGESOUP_DEBUG("edge {} is in the box, but has no candidates", edge_index_raw);
+
                 if (!first && end_self_edge(edge_index, original_edge, edge))
                     return true;
             }
@@ -451,7 +464,7 @@ class EdgeSoup
     // `self_matrix` can only contain rotation and mirroring.
     [[nodiscard]] bool CollideEdgeSoupSimple(const EdgeSoup &other, vector other_offset, matrix other_matrix) const
     {
-        IMP_CONTOUR_DEBUG("------------------------------- simple shape to shape collision:");
+        IMP_EDGESOUP_DEBUG("------------------------------- simple shape to shape collision:");
 
         matrix inv_matrix = InvertRotationMatrix(other_matrix);
         return CollideEdgeSoupLow(other,
@@ -464,7 +477,7 @@ class EdgeSoup
                 (void)self_edge_index;
                 (void)self_edge;
                 bool collides = self_transformed_edge.CollideWithEdgeInclusive(other.GetEdge(other_edge_index), Edge::EdgeCollisionMode::parallelRejected);
-                IMP_CONTOUR_DEBUG("{} to {} -> {}", typename AabbTree::NodeIndex(self_edge_index), typename AabbTree::NodeIndex(other_edge_index), collides);
+                IMP_EDGESOUP_DEBUG("{} to {} -> {}", typename AabbTree::NodeIndex(self_edge_index), typename AabbTree::NodeIndex(other_edge_index), collides);
                 return collides;
             },
             nullptr
@@ -503,7 +516,7 @@ class EdgeSoup
                 if constexpr (Math::floating_point_scalar<scalar>)
                     return scalar(0.01); // Intended as a value measured in pixels.
                 else
-                    return 0;
+                    return 1;
             }();
         };
 
@@ -554,28 +567,51 @@ class EdgeSoup
             matrix other_to_self_rot = params.self_rot * inv_other_rot;
             matrix self_to_other_rot = params.other_rot * inv_self_rot;
 
+            auto map_other_point_to_self = [&](vector point){return self_to_other_rot * (point - params.self_pos) + params.other_pos;};
+            auto map_self_point_to_other = [&](vector point){return other_to_self_rot * (point - params.other_pos) + params.self_pos;};
+
             vector other_delta_vel = params.other_vel - params.self_vel;
 
             // Would need `next_value` here, if not for `hitbox_expansion_epsilon`.
-            scalar max_distance_to_other = max((params.other_pos - params.self_pos).len(), ((params.other_pos + other_delta_vel) - (params.self_pos + params.self_vel)).len());
+            scalar max_distance_to_other = sqrt(max((params.other_pos - params.self_pos).len_sq(), ((params.other_pos + other_delta_vel) - (params.self_pos + params.self_vel)).len_sq()));
 
             std::vector<EdgeIndex> temp_edges;
 
-            rect other_aabb_in_self = [&]{
-                rect ret = other->Bounds();
-                ret = ret.expand_dir(inv_other_rot * other_delta_vel);
-                scalar other_half_outer_radius = other->Bounds().size().len() / 2;
-                ret = ret.center()
+            rect other_aabb_in_self_coords = [&]{
+                rect other_bounds = other->Bounds();
+                // Expand by the relative velocity.
+                other_bounds = other_bounds.expand_dir(inv_other_rot * other_delta_vel);
+                // Compute the outer radius of the other hitbox.
+                scalar other_outer_radius = other->EnclosingRadius();
+                // Expand according to other angular velocity, but not larger than a box enclosing the enclosing circle.
+                other_bounds = vector().centered_rect_halfsize(other_outer_radius).intersect(other_bounds.expand(other_outer_radius * params.other_angular_vel_abs_upper_bound));
+                // Expand according to self angular velocity.
+                other_bounds = other_bounds.expand((other_outer_radius + max_distance_to_other) * params.self_angular_vel_abs_upper_bound);
+
+                rect ret;
+                for (bool first = true; vector point : other_bounds.to_contour())
+                {
+                    if (first)
+                    {
+                        ret = map_other_point_to_self(point).tiny_rect();
+                        first = false;
+                    }
+                    else
+                    {
+                        ret = ret.combine(map_other_point_to_self(point));
+                    }
+                }
+                return ret.expand(params.hitbox_expansion_epsilon);
             }();
 
             self->CollideEdgeSoupLow(
                 *other,
-                [&](vector point){return self_to_other_rot * (point - params.self_pos) + params.other_pos;},
-                [&](vector point){return other_to_self_rot * (point - params.other_pos) + params.self_pos;},
+                other_aabb_in_self_coords,
+                map_self_point_to_other,
                 [&](EdgeIndex edge_index, const EdgeWithData &edge, const Edge &transformed_edge)
                 {
                     (void)edge_index;
-                    return transformed_edge.Bounds().expand_dir(other_delta_vel).expand(
+                    return transformed_edge.Bounds().expand_dir(-other_delta_vel).expand(
                         params.hitbox_expansion_epsilon
                         + edge.max_distance_to_origin * params.self_angular_vel_abs_upper_bound
                         + (edge.max_distance_to_origin + max_distance_to_other) * params.other_angular_vel_abs_upper_bound
@@ -616,18 +652,18 @@ class EdgeSoup
         template <typename F = std::nullptr_t>
         bool Collide(vector self_pos, matrix self_rot, vector other_pos, matrix other_rot, F &&func = nullptr)
         {
-            IMP_CONTOUR_DEBUG("------------------------------- shape to shape collision in a collider:");
+            IMP_EDGESOUP_DEBUG("------------------------------- shape to shape collision in a collider:");
 
             EdgeEntry *edge_entries_ptr = std::launder(reinterpret_cast<EdgeEntry *>(params.memory_pool->data() + pool_offset_to_edge_entries));
             for (std::size_t i = 0; i < num_edge_entries; i++)
             {
                 const EdgeEntry &entry = edge_entries_ptr[i];
-                IMP_CONTOUR_DEBUG("edge {}", typename AabbTree::NodeIndex(entry.edge_index));
+                IMP_EDGESOUP_DEBUG("edge {}", typename AabbTree::NodeIndex(entry.edge_index));
 
                 Edge transformed_self_edge = entry.edge;
                 transformed_self_edge.a = self_pos + self_rot * transformed_self_edge.a;
                 transformed_self_edge.b = self_pos + self_rot * transformed_self_edge.b;
-                IMP_CONTOUR_DEBUG("{}-{} -> {}-{}", entry.edge.a, entry.edge.b, transformed_self_edge.a, transformed_self_edge.b);
+                IMP_EDGESOUP_DEBUG("{}-{} -> {}-{}", entry.edge.a, entry.edge.b, transformed_self_edge.a, transformed_self_edge.b);
 
                 const CollisionCandidate *candidates_ptr = std::launder(reinterpret_cast<const CollisionCandidate *>(params.memory_pool->data() + entry.pool_offset_to_collision_candidates));
 
@@ -635,12 +671,12 @@ class EdgeSoup
                 {
                     const CollisionCandidate &candidate = candidates_ptr[j];
 
-                    IMP_CONTOUR_DEBUG("  candidate {}", typename AabbTree::NodeIndex(candidate.edge_index));
+                    IMP_EDGESOUP_DEBUG("  candidate {}", typename AabbTree::NodeIndex(candidate.edge_index));
 
                     Edge transformed_other_edge = candidate.edge;
                     transformed_other_edge.a = other_pos + other_rot * transformed_other_edge.a;
                     transformed_other_edge.b = other_pos + other_rot * transformed_other_edge.b;
-                    IMP_CONTOUR_DEBUG("{}-{} -> {}-{}", candidate.edge.a, candidate.edge.b, transformed_other_edge.a, transformed_other_edge.b);
+                    IMP_EDGESOUP_DEBUG("{}-{} -> {}-{}", candidate.edge.a, candidate.edge.b, transformed_other_edge.a, transformed_other_edge.b);
                     if constexpr (std::is_null_pointer_v<F>)
                     {
                         if (transformed_self_edge.CollideWithEdgeInclusive(transformed_other_edge, Edge::EdgeCollisionMode::parallelRejected))
