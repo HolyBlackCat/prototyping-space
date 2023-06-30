@@ -56,8 +56,8 @@ class EdgeSoup
 
             scalar abs_d = abs(d);
 
-            scalar u = (delta_a /cross/ delta_other);
-            scalar v = (delta_a /cross/ delta_self);
+            scalar u = delta_a /cross/ delta_other;
+            scalar v = delta_a /cross/ delta_self;
             return abs(u) <= abs_d && abs(v) <= abs_d && u * d >= 0 && v * d >= 0;
         }
     };
@@ -124,8 +124,14 @@ class EdgeSoup
         return aabb_tree.RemoveNode(index);
     }
 
-    // Performs collision tests.
-    class Collider
+    // Get the AABB tree of edges, mostly for debug purposes.
+    [[nodiscard]] const AabbTree &EdgeTree() const
+    {
+        return aabb_tree;
+    }
+
+    // Performs collision tests on points.
+    class PointCollider
     {
         const EdgeSoup *target = nullptr;
 
@@ -135,8 +141,8 @@ class EdgeSoup
         bool ray_negative = false; // false = positive, true = negative.
 
       public:
-        // See (and use) `MakeCollider()` below.
-        Collider(const EdgeSoup &new_target, int ray_dir)
+        // See (and use) `MakePointCollider()` below.
+        PointCollider(const EdgeSoup &new_target, int ray_dir)
             : target(&new_target)
         {
             ray_dir &= 3;
@@ -228,7 +234,7 @@ class EdgeSoup
     // The collider should be a short-lived temporary.
     // The `reference_point` should be near the things you're going to test against, this improves performance.
     // If you're testing against several objects in different locations, create a separate collider for each one.
-    [[nodiscard]] Collider MakeCollider(vector reference_point) const
+    [[nodiscard]] PointCollider MakePointCollider(vector reference_point) const
     {
         rect bounds = Bounds();
 
@@ -240,17 +246,95 @@ class EdgeSoup
         };
 
         int ray_dir = std::min_element(std::begin(distances), std::end(distances)) - std::begin(distances);
-        return MakeColliderWithRayDir(ray_dir);
+        return MakePointColliderWithRayDir(ray_dir);
     }
     // Same, but will cast rays in a custom 4-direction `ray_dir`.
-    [[nodiscard]] Collider MakeColliderWithRayDir(int ray_dir) const
+    [[nodiscard]] PointCollider MakePointColliderWithRayDir(int ray_dir) const
     {
-        return Collider(*this, ray_dir);
+        return PointCollider(*this, ray_dir);
     }
 
-    // Get the AABB tree of edges, mostly for debug purposes.
-    [[nodiscard]] const AabbTree &EdgeTree() const
+    // Collides with an other edge soup.
+    // Only edges are tested. If you want to test for a complete overlap, a separate test is needed.
+    template <typename AabbOrOtherToSelf, typename SelfToOther, typename AdjustBoundsInOther, typename F>
+    bool CollideEdgeSoupLow(
+        const EdgeSoup &other,
+        // If `other` is in the same coorinate system, nullptr. Otherwise,
+        // either a `rect` in self coorinate system that participates in the collision,
+        // or `(vec point) -> vec` that maps from `other` coorinates to self;
+        AabbOrOtherToSelf &&aabb_or_other_to_self,
+        // If `other` is in the same coorinate system, nullptr. Otherwise `(vec point) -> vec` that maps from self coorinates to `other`.
+        SelfToOther &&self_to_other,
+        // If this is a single collision, nullptr. Otherwise `(rect bounds) -> rect` that modifies
+        // the AABBs self edges in the `other` coordinate system (normally expands them to perform series of collisions tests).
+        AdjustBoundsInOther &&adjust_bounds_in_other,
+        // This receives the possibly overlapping edge pairs.
+        // `(EdgeIndex self_edge_index, const Edge &self_transformed_edge, EdgeIndex other_edge_index) -> bool`,
+        // where `{self,other}_edge_index` are the respective edge indices, and `self_transformed_edge` is the self edge transformed to `other` coorinates.
+        // If it returns true, everything stops immediately and also returns true.
+        F &&receive_edge_pairs) const
     {
-        return aabb_tree;
+        // Get AABB of other, transform with `map_point`,
+        // then get AABB of the resulting polygon.
+        rect other_bounds;
+        if constexpr (std::is_null_pointer_v<AabbOrOtherToSelf>)
+        {
+            other_bounds = other.Bounds();
+        }
+        else if constexpr (std::is_same_v<std::remove_cvref_t<AabbOrOtherToSelf>, rect>)
+        {
+            other_bounds = aabb_or_other_to_self;
+        }
+        else
+        {
+            for (bool first = true; vec point : other.Bounds().to_contour())
+            {
+                if (first)
+                {
+                    other_bounds = aabb_or_other_to_self(point).tiny_rect();
+                    first = false;
+                }
+                else
+                {
+                    other_bounds = other_bounds.combine(aabb_or_other_to_self(point));
+                }
+            }
+        }
+
+        return aabb_tree.CollideAabb(other_bounds, [&](EdgeIndex edge_index)
+        {
+            Edge edge = aabb_tree.GetNodeUserData(edge_index);
+            if constexpr (!std::is_null_pointer_v<SelfToOther>)
+            {
+                edge.a = self_to_other(edge.a);
+                edge.b = self_to_other(edge.b);
+            }
+            rect edge_bounds = edge.Bounds();
+            if constexpr (!std::is_null_pointer_v<AdjustBoundsInOther>)
+                edge_bounds = adjust_bounds_in_other(edge_bounds);
+
+            return other.EdgeTree().CollideAabb(edge_bounds, [&](EdgeIndex other_edge_index)
+            {
+                return receive_edge_pairs(edge_index, edge, other_edge_index);
+            });
+        });
+    }
+
+    // A simple one-time collision between two edge soups.
+    // Only edges are tested. If you want to test for a complete overlap, a separate test is needed.
+    // `self_matrix` can only contain rotation and flips.
+    [[nodiscard]] bool CollideEdgeSoupSimple(const EdgeSoup &other, vector self_offset, mat2<scalar> self_matrix) const
+    {
+        mat2<scalar> inv_matrix = self_matrix.transpose();
+        return CollideEdgeSoupLow(other,
+            [&](vector v){return inv_matrix * (v - self_offset);},
+            [&](vector v){return self_matrix * v + self_offset;},
+            nullptr,
+            [&](EdgeIndex self_edge_index, const Edge &self_transformed_edge, EdgeIndex other_edge_index)
+            {
+                (void)self_edge_index;
+                return self_transformed_edge.CollideWithEdgeInclusive(other.EdgeTree().GetNodeUserData(other_edge_index), Edge::EdgeCollisionMode::parallelRejected);
+            }
+        );
     }
 };
