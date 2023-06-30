@@ -159,7 +159,7 @@ class EdgeSoup
         EdgeWithData edge_with_data;
         edge_with_data.Edge::operator=(edge);
         edge_with_data.max_distance_to_origin = MaxEdgeDistanceToOrigin(edge_with_data);
-        dense_edge_indices.Insert(dense_edge_indices.ElemCount()); // Sic.
+        edge_with_data.dense_index = dense_edge_indices.ElemCount(); // Sic.
         auto ret = aabb_tree.AddNode(edge.Bounds(), std::move(edge_with_data));
 
         // `SparseSet` doesn't auto-increase capacity.
@@ -199,7 +199,7 @@ class EdgeSoup
     // Raises a debug assertion if no such edge.
     void RemoveEdge(EdgeIndex edge_index)
     {
-        [[maybe_unused]] bool ok = dense_edge_indices.EraseUnordered(AabbTree::NodeIndex(edge_index)); // Sic.
+        [[maybe_unused]] bool ok = dense_edge_indices.EraseUnordered(typename AabbTree::NodeIndex(edge_index)); // Sic.
         ASSERT(ok);
         ok = aabb_tree.RemoveNode(typename AabbTree::NodeIndex(edge_index));
         ASSERT(ok);
@@ -411,7 +411,7 @@ class EdgeSoup
     // `self_matrix` can only contain rotation and mirroring.
     [[nodiscard]] bool CollideEdgeSoupSimple(const EdgeSoup &other, vector self_offset, matrix self_matrix) const
     {
-        matrix inv_matrix = InvertRotationMatrix(self_matrix.transpose);
+        matrix inv_matrix = InvertRotationMatrix(self_matrix.transpose());
         return CollideEdgeSoupLow(other,
             [&](vector v){return inv_matrix * (v - self_offset);},
             [&](vector v){return self_matrix * v + self_offset;},
