@@ -25,7 +25,7 @@ namespace GameUtils::TilesToEdges
             // The outer vector describes tile types.
             // The middle vector decribes edge loops in a tile.
             // The inner vector stores vertex indices of a specific edge loop.
-            // Box2D requires the vertices to have a specific winding (CW if Y points down, CCW if Y points up).
+            // Common sense (and Box2D) requires the vertices to have a specific winding (CW if Y points down, CCW if Y points up).
             REFL_DECL(std::vector<std::vector<std::vector<std::size_t>>>) tiles
         )
 
