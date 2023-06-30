@@ -184,6 +184,7 @@ TEST_CASE("edge_soup.pixelperfect.axis_aligned")
     }
 }
 
+// Different kinds of overhangs.
 TEST_CASE("edge_soup.overhands")
 {
     EdgeSoup<int> c;
@@ -285,4 +286,45 @@ TEST_CASE("edge_soup.overhands")
 ..................
 )"]);
     }
+}
+
+// Single edge to edge collisions.
+TEST_CASE("edge_soup.edge_to_edge")
+{
+    using T = EdgeSoup<int>;
+
+    auto sameInAllModes = [](T::Edge e1, T::Edge e2) -> bool
+    {
+        [[maybe_unused]] bool r1 = e1.CollideWithEdgeInclusive(e2, T::Edge::EdgeCollisionMode::parallelRejected);
+        [[maybe_unused]] bool r2 = e1.CollideWithEdgeInclusive(e2, T::Edge::EdgeCollisionMode::parallelUnspecified);
+        REQUIRE_EQ(r1, r2);
+        return r1;
+    };
+
+    // True intersection.
+    REQUIRE(sameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,19), ivec2(10,21)}));
+
+    // Point 1 touches.
+    REQUIRE(sameInAllModes({ivec2(10, 20), ivec2(12,20)}, {ivec2(10,19), ivec2(10,21)}));
+    REQUIRE_FALSE(sameInAllModes({ivec2(11, 20), ivec2(12,20)}, {ivec2(10,19), ivec2(10,21)}));
+    // Point 2 touches.
+    REQUIRE(sameInAllModes({ivec2(8, 20), ivec2(10,20)}, {ivec2(10,19), ivec2(10,21)}));
+    REQUIRE_FALSE(sameInAllModes({ivec2(8, 20), ivec2(9,20)}, {ivec2(10,19), ivec2(10,21)}));
+    // Point 3 touches.
+    REQUIRE(sameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,18), ivec2(10,20)}));
+    REQUIRE_FALSE(sameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,18), ivec2(10,19)}));
+    // Point 4 touches.
+    REQUIRE(sameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,20), ivec2(10,22)}));
+    REQUIRE_FALSE(sameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,21), ivec2(10,22)}));
+
+    // Parallel overlap.
+    REQUIRE(T::Edge{ivec2(10, 20), ivec2(14,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(16,20)}, T::Edge::EdgeCollisionMode::parallelUnspecified));
+    // Parallel overlap rejected.
+    REQUIRE_FALSE(T::Edge{ivec2(10, 20), ivec2(14,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(16,20)}, T::Edge::EdgeCollisionMode::parallelRejected));
+    // Parallel side by side.
+    REQUIRE_FALSE(sameInAllModes({ivec2(10, 20), ivec2(11,20)}, {ivec2(10,21), ivec2(11,21)}));
+    // Parallel, same line but no overlap.
+    REQUIRE_FALSE(T::Edge{ivec2(10, 20), ivec2(11,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(13,20)}, T::Edge::EdgeCollisionMode::parallelRejected));
+    REQUIRE_FALSE(T::Edge{ivec2(11, 20), ivec2(10,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(13,20)}, T::Edge::EdgeCollisionMode::parallelRejected));
+    REQUIRE_FALSE(T::Edge{ivec2(11, 20), ivec2(10,20)}.CollideWithEdgeInclusive({ivec2(13,20), ivec2(12,20)}, T::Edge::EdgeCollisionMode::parallelRejected));
 }
