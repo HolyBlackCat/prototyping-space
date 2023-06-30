@@ -617,6 +617,7 @@ class EdgeSoup
                 Edge transformed_self_edge = entry.edge;
                 transformed_self_edge.a = self_pos + self_rot * transformed_self_edge.a;
                 transformed_self_edge.b = self_pos + self_rot * transformed_self_edge.b;
+                IMP_CONTOUR_DEBUG("{}-{} -> {}-{}", entry.edge.a, entry.edge.b, transformed_self_edge.a, transformed_self_edge.b);
 
                 const CollisionCandidate *candidates_ptr = std::launder(reinterpret_cast<const CollisionCandidate *>(params.memory_pool->data() + entry.pool_offset_to_collision_candidates));
 
@@ -624,9 +625,12 @@ class EdgeSoup
                 {
                     const CollisionCandidate &candidate = candidates_ptr[j];
 
+                    IMP_CONTOUR_DEBUG("  candidate {}", typename AabbTree::NodeIndex(candidate.edge_index));
+
                     Edge transformed_other_edge = candidate.edge;
                     transformed_other_edge.a = other_pos + other_rot * transformed_other_edge.a;
                     transformed_other_edge.b = other_pos + other_rot * transformed_other_edge.b;
+                    IMP_CONTOUR_DEBUG("{}-{} -> {}-{}", candidate.edge.a, candidate.edge.b, transformed_other_edge.a, transformed_other_edge.b);
                     if constexpr (std::is_null_pointer_v<F>)
                     {
                         if (transformed_self_edge.CollideWithEdgeInclusive(transformed_other_edge, Edge::EdgeCollisionMode::parallelRejected))

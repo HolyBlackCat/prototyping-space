@@ -179,19 +179,19 @@ struct ContourDemo
                     .other_angular_vel_abs_upper_bound = 0,
                 });
 
-                collides = collider.Collide(other_pos, other_matrix, vector{}, matrix{});
+                // collides = collider.Collide(vector{}, matrix{}, other_pos, other_matrix);
 
-                // float t = 0.5f;
-                // other_offset = other_vel * 0.5f;
-                // for (int i = 0; i < num_steps; i++)
-                // {
-                //     bool hit = collider.Collide(other_pos + other_offset, other_matrix, vector{}, matrix{});
-                //     if (hit)
-                //         collides = true;
+                float t = 0.5f;
+                other_offset = other_vel * 0.5f;
+                for (int i = 0; i < num_steps; i++)
+                {
+                    bool hit = collider.Collide(vector{}, matrix{}, other_pos + other_offset, other_matrix);
+                    if (hit)
+                        collides = true;
 
-                //     t += (hit ? -1 : 1) * (1.f / (1 << (i + 2)));
-                //     other_offset = other_vel * t;
-                // }
+                    t += (hit ? -1 : 1) * (1.f / (1 << (i + 2)));
+                    other_offset = other_vel * t;
+                }
             }
 
             DrawShape(shape, vector{}, matrix{}, collides ? fvec3(1,0,1) : fvec3(1,1,1));
