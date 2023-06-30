@@ -34,13 +34,17 @@ template class EdgeSoup<float>;
 
 struct ContourDemo
 {
-    using Shape = EdgeSoup<int>;
+    using scalar = float;
+    using vector = vec2<scalar>;
+    using matrix = mat2<scalar>;
+
+    using Shape = EdgeSoup<scalar>;
     Shape shape;
-    std::vector<ivec2> unfinished_contour;
+    std::vector<vector> unfinished_contour;
 
     Shape other_shape;
-    ivec2 other_pos;
-    imat2 other_matrix;
+    vector other_pos;
+    matrix other_matrix;
 
     void DrawLine(fvec2 a, fvec2 b, fvec3 color, float alpha = 1) const
     {
@@ -52,6 +56,37 @@ struct ContourDemo
         fvec2 center = (a + b) / 2;
         DrawLine(center, center + (b - a).rot90(-1).norm() * 8, color, alpha);
     }
+    void DrawShape(const Shape &target_shape, Shape::vector target_pos, Shape::matrix target_rot, fvec3 color, float alpha = 1) const
+    {
+        auto bounds = target_shape.Bounds().to_contour();
+        for (auto &vertex : bounds)
+            vertex = target_rot * vertex + target_pos;
+
+        r.ftriangle(bounds[0], bounds[1], bounds[3]).color(fvec3(1,1,1)).alpha(0.1f);
+        r.ftriangle(bounds[1], bounds[2], bounds[3]).color(fvec3(1,1,1)).alpha(0.1f);
+
+        target_shape.EdgeTree().CollideCustom([&](auto &&){return true;}, [&](Shape::AabbTree::NodeIndex e)
+        {
+            Shape::Edge edge = target_shape.GetEdge(Shape::EdgeIndex(e));
+            edge.a = target_rot * edge.a;
+            edge.b = target_rot * edge.b;
+            edge.a += target_pos;
+            edge.b += target_pos;
+            DrawLineWithNormal(edge.a, edge.b, color, alpha);
+            auto maybe_round = []<typename T>(vec2<T> value)
+            {
+                if constexpr (Math::floating_point_scalar<T>)
+                    return iround(value);
+                else
+                    return value;
+            };
+            auto edge_center = maybe_round((edge.a + edge.b) / 2);
+            for (int i = 0; i < 4; i++)
+                r.itext(edge_center + ivec2::dir4(i), Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(0,0,0));
+            r.itext(edge_center, Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(1,1,1));
+            return false;
+        });
+    }
 
     void AddUnfinishedContourToShape(Shape *target_shape = nullptr)
     {
@@ -60,8 +95,8 @@ struct ContourDemo
 
         if (!unfinished_contour.empty())
         {
-            std::optional<ivec2> prev;
-            for (ivec2 point : unfinished_contour)
+            std::optional<vector> prev;
+            for (vector point : unfinished_contour)
             {
                 if (prev)
                     target_shape->AddEdge({.a = *prev, .b = point});
@@ -102,7 +137,8 @@ struct ContourDemo
             AddUnfinishedContourToShape();
 
         other_pos = mouse.pos();
-        other_matrix = imat2(0,-1,-1,0);
+        // other_matrix = imat2(0,-1,1,0);
+        // other_matrix = matrix::rotate(to_rad(10));
     }
 
     void Render() const
@@ -112,48 +148,61 @@ struct ContourDemo
 
         { // The shape.
             bool collides = false;
+            vector other_offset;
             if (unfinished_contour.empty())
             {
                 // // Point collision.
-                // auto collider = shape.MakePointCollider(ivec2(0));
+                // auto collider = shape.MakePointCollider(vector(0));
                 // collides = collider.CollidePoint(mouse.pos());
                 // r.fquad(mouse.pos() + 0.5f, fvec2(32, 1)).center(fvec2(0.5f)).rotate(collider.DebugRayDirection() * f_pi / 2).color(fvec3(0,0,1));
 
-                collides = other_shape.CollideEdgeSoupSimple(shape, other_pos, other_matrix);
+                // // Shape collision.
+                // collides = shape.CollideEdgeSoupSimple(other_shape, other_pos, other_matrix);
+
+                // Shape collision with offset.
+                int num_steps = 8;
+                vector other_vel(20, 10);
+
+                std::vector<char> memory;
+                std::size_t memory_pos = 0;
+
+                auto collider = shape.MakeEdgeSoupCollider(other_shape, {
+                    .memory_pool = &memory,
+                    .memory_pool_offset = &memory_pos,
+                    .self_pos = vector{},
+                    .other_pos = other_pos,
+                    .self_vel = vector{},
+                    .other_vel = other_vel,
+                    .self_rot = matrix{},
+                    .other_rot = other_matrix,
+                    .self_angular_vel_abs_upper_bound = 0,
+                    .other_angular_vel_abs_upper_bound = 0,
+                });
+
+                collides = collider.Collide(other_pos, other_matrix, vector{}, matrix{});
+
+                // float t = 0.5f;
+                // other_offset = other_vel * 0.5f;
+                // for (int i = 0; i < num_steps; i++)
+                // {
+                //     bool hit = collider.Collide(other_pos + other_offset, other_matrix, vector{}, matrix{});
+                //     if (hit)
+                //         collides = true;
+
+                //     t += (hit ? -1 : 1) * (1.f / (1 << (i + 2)));
+                //     other_offset = other_vel * t;
+                // }
             }
 
-            r.fquad(shape.Bounds()).color(fvec3(1,1,1)).alpha(0.1f);
+            DrawShape(shape, vector{}, matrix{}, collides ? fvec3(1,0,1) : fvec3(1,1,1));
 
-            shape.EdgeTree().CollideCustom([](auto &&){return true;}, [&](Shape::AabbTree::NodeIndex e)
-            {
-                const auto &edge = shape.GetEdge(Shape::EdgeIndex(e));
-                DrawLineWithNormal(edge.a, edge.b, collides ? fvec3(1,0,1) : fvec3(1,1,1));
-                for (int i = 0; i < 4; i++)
-                    r.itext((edge.a + edge.b) / 2 + ivec2::dir4(i), Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(0,0,0));
-                r.itext((edge.a + edge.b) / 2, Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(1,1,1));
-                return false;
-            });
-        }
-
-        { // Other shape.
-            other_shape.EdgeTree().CollideCustom([&](auto &&){return true;}, [&](Shape::AabbTree::NodeIndex e)
-            {
-                Shape::Edge edge = other_shape.GetEdge(Shape::EdgeIndex(e));
-                edge.a = other_matrix * edge.a;
-                edge.b = other_matrix * edge.b;
-                edge.a += other_pos;
-                edge.b += other_pos;
-                DrawLineWithNormal(edge.a, edge.b, fvec3(0,0.5f,1));
-                for (int i = 0; i < 4; i++)
-                    r.itext((edge.a + edge.b) / 2 + ivec2::dir4(i), Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(0,0,0));
-                r.itext((edge.a + edge.b) / 2, Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(1,1,1));
-                return false;
-            });
+            DrawShape(other_shape, other_pos + other_offset, other_matrix, fvec3(0.2f, 0.2f, 0.2f));
+            DrawShape(other_shape, other_pos, other_matrix, fvec3(0,0.5f,1));
         }
 
         { // Unfinished contour.
-            std::optional<ivec2> prev;
-            for (ivec2 point : unfinished_contour)
+            std::optional<vector> prev;
+            for (vector point : unfinished_contour)
             {
                 if (prev)
                     DrawLineWithNormal(*prev, point, fvec3(0,1,0));
