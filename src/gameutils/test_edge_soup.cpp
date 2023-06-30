@@ -3,10 +3,10 @@
 
 #include <doctest/doctest.h>
 
-#include "contour.h"
+#include "edge_soup.h"
 
 // Some basic point collision tests.
-TEST_CASE("contour.basic")
+TEST_CASE("edge_soup.basic")
 {
     #define COLLIDE_POINT(c_, point_, result_, .../*allowed ray dirs*/) \
         do \
@@ -18,7 +18,7 @@ TEST_CASE("contour.basic")
         } \
         while (false)
 
-    ContourShape<int> c;
+    EdgeSoup<int> c;
 
     // An octagon with no axis-aligned edges.
     constexpr int halfsize = 100, gap = 20;
@@ -72,9 +72,9 @@ TEST_CASE("contour.basic")
 }
 
 // Rasterize using point collisions and compare against reference.
-TEST_CASE("contour.pixelperfect.basic")
+TEST_CASE("edge_soup.pixelperfect.basic")
 {
-    ContourShape<int> c;
+    EdgeSoup<int> c;
     c.AddLoop(std::array{
         ivec2( 6, 0),
         ivec2(12, 6),
@@ -125,9 +125,9 @@ TEST_CASE("contour.pixelperfect.basic")
 
 // Rasterize using point collisions and compare against reference.
 // This additionally includes axis-aligned edges.
-TEST_CASE("contour.pixelperfect.axis_aligned")
+TEST_CASE("edge_soup.pixelperfect.axis_aligned")
 {
-    ContourShape<int> c;
+    EdgeSoup<int> c;
     c.AddLoop(std::array{
         ivec2( 4, 0),
         ivec2( 8, 0),
@@ -184,9 +184,9 @@ TEST_CASE("contour.pixelperfect.axis_aligned")
     }
 }
 
-TEST_CASE("contour.overhands")
+TEST_CASE("edge_soup.overhands")
 {
-    ContourShape<int> c;
+    EdgeSoup<int> c;
     c.AddLoop(std::array{
         ivec2(  0, 0),
         ivec2(  5,20),

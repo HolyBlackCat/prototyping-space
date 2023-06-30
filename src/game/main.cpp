@@ -1,4 +1,4 @@
-#include "gameutils/contour.h"
+#include "gameutils/edge_soup.h"
 
 const ivec2 screen_size = ivec2(480, 270);
 const std::string_view window_name = "2D contours";
@@ -31,7 +31,7 @@ Random::DefaultInterfaces<Random::DefaultGenerator> ra(random_generator);
 
 struct ContourDemo
 {
-    using Shape = ContourShape<int>;
+    using Shape = EdgeSoup<int>;
     Shape shape;
     std::vector<ivec2> unfinished_contour;
 
