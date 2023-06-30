@@ -85,7 +85,7 @@ class EdgeSoup
     {
         if constexpr (Math::floating_point_scalar<T>)
         {
-            return point.len();
+            return next_value(point.len());
         }
         else
         {
@@ -337,24 +337,35 @@ class EdgeSoup
 
     // Collides with an other edge soup.
     // Only edges are tested. If you want to test for a complete overlap, a separate test is needed.
-    template <typename AabbOrOtherToSelf, typename SelfToOther, typename EdgeBoundsInOther, typename F>
+    template <typename AabbOrOtherToSelf, typename SelfToOther, typename EdgeBoundsInOther, typename BeginF, typename StepF, typename EndF>
     bool CollideEdgeSoupLow(
         const EdgeSoup &other,
         // If `other` is in the same coorinate system, nullptr. Otherwise,
         // either a `rect` in self coorinate system that participates in the collision,
-        // or `(vec point) -> vec` that maps from `other` coorinates to self;
+        // or `(vector point) -> vector` that maps from `other` coorinates to self.
         AabbOrOtherToSelf &&aabb_or_other_to_self,
-        // If `other` is in the same coorinate system, nullptr. Otherwise `(vec point) -> vec` that maps from self coorinates to `other`.
+        // If `other` is in the same coorinate system, nullptr. Otherwise `(vector point) -> vector` that maps from self coorinates to `other`.
         SelfToOther &&self_to_other,
-        // If this is a single collision, nullptr. Otherwise `(EdgeIndex edge_index, const Edge &transformed_edge) -> rect`
+        // If this is a single collision, nullptr. Otherwise `(EdgeIndex edge_index, const EdgeWithData &edge, const Edge &transformed_edge) -> rect`
         // that returns the AABB of the edge in `other` coordinates. `transformed_edge` is edge at `edge_index` already transformed to those coordinates.
+        // `edge` is redundant when we have `edge_index`, but it's still passed for convenience.
         // Normally it should return `transformed_edge.Bounds()` extended in some direction, to then perform multiple collisions tests.
         EdgeBoundsInOther &&edge_bounds_in_other,
-        // This receives the possibly overlapping edge pairs.
-        // `(EdgeIndex self_edge_index, const Edge &self_transformed_edge, EdgeIndex other_edge_index) -> bool`,
-        // where `{self,other}_edge_index` are the respective edge indices, and `self_transformed_edge` is the self edge transformed to `other` coorinates.
-        // If it returns true, everything stops immediately and also returns true.
-        F &&receive_edge_pairs) const
+        // This is called before processing each potentially colliding edge of self.
+        // It's GUARANTEED to be followed by at least one `add_other_edge`.
+        // Either nullptr or `(EdgeIndex self_edge_index, const Edge &self_transformed_edge) -> bool`,
+        // where `self_transformed_edge` is the self edge transformed to other coordinates.
+        // If this returns true, everything stops and the function also returns true.
+        BeginF &&begin_self_edge,
+        // This receives other edges possibly colliding with the edge previously passed to `begin_self_edge`.
+        // This will be called at least once per `begin_self_edge`.
+        // `(EdgeIndex self_edge_index, const Edge &self_transformed_edge, EdgeIndex other_edge_index) -> bool`.
+        // If this returns true, everything stops and the function also returns true.
+        StepF &&add_other_edge,
+        // This is the counterpart of `begin_self_edge`. Either nullptr or `() -> bool`.
+        // If this returns true, everything stops and the function also returns true.
+        EndF &&end_self_edge
+    ) const
     {
         // Get AABB of other, transform with `map_point`,
         // then get AABB of the resulting polygon.
@@ -369,7 +380,7 @@ class EdgeSoup
         }
         else
         {
-            for (bool first = true; vec point : other.Bounds().to_contour())
+            for (bool first = true; vector point : other.Bounds().to_contour())
             {
                 if (first)
                 {
@@ -386,7 +397,8 @@ class EdgeSoup
         return aabb_tree.CollideAabb(other_bounds, [&](typename AabbTree::NodeIndex edge_index_raw)
         {
             const EdgeIndex edge_index = EdgeIndex(edge_index_raw);
-            Edge edge = GetEdge(edge_index);
+            const EdgeWithData &original_edge = GetEdge(edge_index);
+            Edge edge = original_edge;
             if constexpr (!std::is_null_pointer_v<SelfToOther>)
             {
                 edge.a = self_to_other(edge.a);
@@ -397,12 +409,33 @@ class EdgeSoup
             if constexpr (std::is_null_pointer_v<EdgeBoundsInOther>)
                 edge_bounds = edge.Bounds();
             else
-                edge_bounds = edge_bounds_in_other(edge_index, edge);
+                edge_bounds = edge_bounds_in_other(edge_index, original_edge, edge);
 
-            return other.EdgeTree().CollideAabb(edge_bounds, [&](typename AabbTree::NodeIndex other_edge_index)
+            bool first = true;
+
+            bool stop = other.EdgeTree().CollideAabb(edge_bounds, [&](typename AabbTree::NodeIndex other_edge_index)
             {
-                return receive_edge_pairs(edge_index, edge, EdgeIndex(other_edge_index));
+                if (first)
+                {
+                    first = false;
+                    if constexpr (!std::is_null_pointer_v<BeginF>)
+                    {
+                        if (begin_self_edge(edge_index, edge))
+                            return true;
+                    }
+                }
+                return add_other_edge(edge_index, edge, EdgeIndex(other_edge_index));
             });
+            if (stop)
+                return true;
+
+            if constexpr (!std::is_null_pointer_v<EndF>)
+            {
+                if (!first && end_self_edge())
+                    return true;
+            }
+
+            return false;
         });
     }
 
@@ -416,11 +449,13 @@ class EdgeSoup
             [&](vector v){return inv_matrix * (v - self_offset);},
             [&](vector v){return self_matrix * v + self_offset;},
             nullptr,
+            nullptr,
             [&](EdgeIndex self_edge_index, const Edge &self_transformed_edge, EdgeIndex other_edge_index)
             {
                 (void)self_edge_index;
                 return self_transformed_edge.CollideWithEdgeInclusive(other.GetEdge(other_edge_index), Edge::EdgeCollisionMode::parallelRejected);
-            }
+            },
+            nullptr
         );
     }
 
@@ -439,10 +474,12 @@ class EdgeSoup
             const EdgeSoup *self = nullptr;
             const EdgeSoup *other = nullptr;
 
-            // Other position relative to self.
-            vector other_delta_pos;
-            // Other velocity relative to self.
-            vector other_delta_vel;
+            // Positions.
+            vector self_pos;
+            vector other_pos;
+            // Velocities.
+            vector self_vel;
+            vector other_vel;
 
             // Rotation matrixes. Can include mirroring.
             matrix self_rot;
@@ -451,6 +488,13 @@ class EdgeSoup
             // Angular velocity in radians, absolute. Can be larger than the true value.
             scalar self_angular_vel_abs_upper_bound = 0;
             scalar other_angular_vel_abs_upper_bound = 0;
+
+            scalar hitbox_expansion_epsilon = []{
+                if constexpr (Math::floating_point_scalar<scalar>)
+                    return scalar(0.01); // Intended as a value measured in pixels.
+                else
+                    return 0;
+            }();
         };
 
         Params params;
@@ -476,10 +520,46 @@ class EdgeSoup
         std::span<const EdgeEntry> edge_entries;
 
       public:
-        EdgeSoupCollider(Params params) : params(std::move(params))
+        EdgeSoupCollider(Params new_params) : params(std::move(new_params))
         {
             EdgeEntry *edge_entries_ptr = AllocInPool<EdgeEntry>(params.self->NumEdges());
-            #error continue
+            std::size_t num_edge_entries = 0;
+
+            matrix other_to_self_rot = params.self_rot * InvertRotationMatrix(params.other_rot);
+            matrix self_to_other_rot = params.other_rot * InvertRotationMatrix(params.self_rot);
+
+            vector other_delta_vel = params.other_vel - params.self_vel;
+
+            // Would need `next_value` here, if not for `hitbox_expansion_epsilon`.
+            vector max_distance_to_other = max((params.other_pos - params.self_pos).len(), ((params.other_pos + params.other_delta_vel) - (params.self_pos + params.self_vel)).len());
+
+            std::vector<
+
+            params.self->CollideEdgeSoupLow(
+                *params.other,
+                [&](vector point){other_to_self_rot * (point - params.other_pos) + params.self_pos;},
+                [&](vector point){self_to_other_rot * (point - params.self_pos) + params.other_pos;},
+                [&](EdgeIndex edge_index, const EdgeWithData &edge, const Edge &transformed_edge)
+                {
+                    (void)edge_index;
+                    return transformed_edge.Bounds().expand_dir(other_delta_vel).expand(
+                        params.hitbox_expansion_epsilon
+                        + edge.max_distance_to_origin * params.self_angular_vel_abs_upper_bound
+                        + (edge.max_distance_to_origin + max_distance_to_other) * params.other_angular_vel_abs_upper_bound
+                    );
+                },
+                [](EdgeIndex self_edge_index, const Edge &self_transformed_edge)
+                {
+                    #error allocate entry here
+                    return false;
+                },
+                [](EdgeIndex self_edge_index, const Edge &self_transformed_edge, EdgeIndex other_edge_index)
+                {
+                    #error append edge here
+                    return false;
+                },
+                #error third lambda here
+                );
         }
 
 
