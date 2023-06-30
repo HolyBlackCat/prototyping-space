@@ -108,20 +108,11 @@ class ContourShape
         bool ray_negative = false; // false = positive, true = negative.
 
       public:
-        // See `MakeCollider()` below.
-        Collider(const ContourShape &new_target, vector reference_point)
+        // See (and use) `MakeCollider()` below.
+        Collider(const ContourShape &new_target, int ray_dir)
             : target(&new_target)
         {
-            rect bounds = target->Bounds();
-
-            int distances[4] = {
-                bounds.b.x - reference_point.x,
-                bounds.b.y - reference_point.y,
-                reference_point.x - bounds.a.x,
-                reference_point.y - bounds.a.y,
-            };
-
-            int ray_dir = std::min_element(std::begin(distances), std::end(distances)) - std::begin(distances);
+            ray_dir &= 3;
             ray_vertical = ray_dir % 2;
             ray_negative = ray_dir >= 2;
         }
@@ -160,33 +151,41 @@ class ContourShape
                     return false;
                 }
 
-                // 1 = we're exiting the edge from behind.
-                // -1 = we're entering the edge from the front.
-                int ray_edge_sign = (edge.b[!ray_vertical] > edge.a[!ray_vertical]) != ray_vertical != ray_negative ? 1 : -1;
+                // true = we're exiting the edge from behind.
+                // false = we're entering the edge from the front.
+                bool ray_exits_shape = (edge.b[!ray_vertical] > edge.a[!ray_vertical]) != ray_vertical != ray_negative;
 
                 // Run a precise collision test.
                 // We increment the counter, with the sign depending on the ray-to-edge direction.
                 // If one of the edge points exactly overlaps the ray, this counts as a half-collision.
-                if ((edge.b - edge.a) /cross/ (point - edge.a) * ray_edge_sign >= 0)
+                if (((edge.b - edge.a) /cross/ (point - edge.a) >= 0) == ray_exits_shape)
                 {
-                    int delta = (bool(a_side_sign) + bool(b_side_sign)) * ray_edge_sign;
+                    int delta = (bool(a_side_sign) + bool(b_side_sign)) * (ray_exits_shape ? 1 : -1);
                     counter += delta;
                     IMP_CONTOUR_DEBUG("edge {} PASSES precise collision: {:+}", edge_index, delta);
                     return false;
                 }
 
-                IMP_CONTOUR_DEBUG("edge {} fails precise collision (sign = {:+})", edge_index, ray_edge_sign);
+                IMP_CONTOUR_DEBUG("edge {} fails precise collision (sign = {:+})", edge_index, ray_exits_shape ? 1 : -1);
 
                 return false;
             });
 
-            // 0 is no collision. 1 tangent collision with the edge.
-            // 2 is a collision. Everything else is a geometry issue or an altorithm issue.
+            // 0 = no collision
+            // 1 = tangent collision with an outside edge (the point is on an outside edge, and the ray is parallel to it).
+            // 2 = collision
+            // 3 = convex corner collision (the point is exactly in a convex corner, and the adjacent edge directions point to different sides of the ray)
+            // Everything else is a geometry issue or an altorithm issue.
             // This holds even if the geometry has holes.
-            ASSERT(counter == 0 || counter == 1 || counter == 2, "Bad contour geometry, or broken algorithm.");
+            ASSERT(counter == 0 || counter == 1 || counter == 2 || counter == 3, "Bad contour geometry, or broken algorithm.");
 
             IMP_CONTOUR_DEBUG("// counter = {}", counter);
-            IMP_CONTOUR_DEBUG("-----> {}", counter == 0 ? "no collision" : counter == 1 ? "TANGENT collision" : counter == 2 ? "COLLISION" : "(error?)");
+            IMP_CONTOUR_DEBUG("-----> {}",
+                counter == 0 ? "no collision" :
+                counter == 1 ? "TANGENT collision" :
+                counter == 2 ? "COLLISION" :
+                counter == 3 ? "CONVEX CORNER collision" :
+                "(error?)");
 
             return counter != 0;
         }
@@ -204,7 +203,22 @@ class ContourShape
     // If you're testing against several objects in different locations, create a separate collider for each one.
     [[nodiscard]] Collider MakeCollider(vector reference_point) const
     {
-        return Collider(*this, reference_point);
+        rect bounds = Bounds();
+
+        int distances[4] = {
+            bounds.b.x - reference_point.x,
+            bounds.b.y - reference_point.y,
+            reference_point.x - bounds.a.x,
+            reference_point.y - bounds.a.y,
+        };
+
+        int ray_dir = std::min_element(std::begin(distances), std::end(distances)) - std::begin(distances);
+        return MakeColliderWithRayDir(ray_dir);
+    }
+    // Same, but will cast rays in a custom 4-direction `ray_dir`.
+    [[nodiscard]] Collider MakeColliderWithRayDir(int ray_dir) const
+    {
+        return Collider(*this, ray_dir);
     }
 
     // Get the AABB tree of edges, mostly for debug purposes.
