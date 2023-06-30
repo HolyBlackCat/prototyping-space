@@ -47,7 +47,10 @@ class EdgeSoup
             parallelRejected, // Parallel edges are always considered not colliding.
         };
 
-        [[nodiscard]] bool CollideWithEdgeInclusive(Edge other, EdgeCollisionMode mode) const
+        // If specified, `func` is called on collision, with three parameters: `(scalar num_self, scalar num_other, scalar den) -> void`.
+        // `num_self / den` is the fractional position on self edge, and `num_other / den` is the fractional position on the other edge.
+        template <typename F = std::nullptr_t>
+        [[nodiscard]] bool CollideWithEdgeInclusive(Edge other, EdgeCollisionMode mode, F &&func = nullptr) const
         {
             // This is essentially `all_of(0 <= Math::point_dir_intersection_factor_two_way(...)[i] <= 1)`, but without division.
             vector delta_a = other.a - a;
@@ -62,7 +65,10 @@ class EdgeSoup
 
             scalar u = delta_a /cross/ delta_other;
             scalar v = delta_a /cross/ delta_self;
-            return abs(u) <= abs_d && abs(v) <= abs_d && u * d >= 0 && v * d >= 0;
+            bool ret = abs(u) <= abs_d && abs(v) <= abs_d && u * d >= 0 && v * d >= 0;
+            if constexpr (!std::is_null_pointer_v<F>)
+                std::forward<F>(func)(u, v, d);
+            return ret;
         }
     };
 
@@ -85,7 +91,7 @@ class EdgeSoup
     {
         if constexpr (Math::floating_point_scalar<T>)
         {
-            return next_value(point.len());
+            return Math::next_value(point.len());
         }
         else
         {
@@ -353,16 +359,17 @@ class EdgeSoup
         EdgeBoundsInOther &&edge_bounds_in_other,
         // This is called before processing each potentially colliding edge of self.
         // It's GUARANTEED to be followed by at least one `add_other_edge`.
-        // Either nullptr or `(EdgeIndex self_edge_index, const Edge &self_transformed_edge) -> bool`,
+        // Either nullptr or `(EdgeIndex self_edge_index, const EdgeWithData &edge, const Edge &self_transformed_edge) -> bool`,
         // where `self_transformed_edge` is the self edge transformed to other coordinates.
         // If this returns true, everything stops and the function also returns true.
         BeginF &&begin_self_edge,
         // This receives other edges possibly colliding with the edge previously passed to `begin_self_edge`.
         // This will be called at least once per `begin_self_edge`.
-        // `(EdgeIndex self_edge_index, const Edge &self_transformed_edge, EdgeIndex other_edge_index) -> bool`.
+        // `(EdgeIndex self_edge_index, const EdgeWithData &edge, const Edge &self_transformed_edge, EdgeIndex other_edge_index) -> bool`.
         // If this returns true, everything stops and the function also returns true.
         StepF &&add_other_edge,
-        // This is the counterpart of `begin_self_edge`. Either nullptr or `() -> bool`.
+        // This is the counterpart of `begin_self_edge`.
+        // Either nullptr or `(EdgeIndex self_edge_index, const EdgeWithData &edge, const Edge &self_transformed_edge) -> bool`.
         // If this returns true, everything stops and the function also returns true.
         EndF &&end_self_edge
     ) const
@@ -420,18 +427,18 @@ class EdgeSoup
                     first = false;
                     if constexpr (!std::is_null_pointer_v<BeginF>)
                     {
-                        if (begin_self_edge(edge_index, edge))
+                        if (begin_self_edge(edge_index, original_edge, edge))
                             return true;
                     }
                 }
-                return add_other_edge(edge_index, edge, EdgeIndex(other_edge_index));
+                return add_other_edge(edge_index, original_edge, edge, EdgeIndex(other_edge_index));
             });
             if (stop)
                 return true;
 
             if constexpr (!std::is_null_pointer_v<EndF>)
             {
-                if (!first && end_self_edge())
+                if (!first && end_self_edge(edge_index, original_edge, edge))
                     return true;
             }
 
@@ -450,9 +457,10 @@ class EdgeSoup
             [&](vector v){return self_matrix * v + self_offset;},
             nullptr,
             nullptr,
-            [&](EdgeIndex self_edge_index, const Edge &self_transformed_edge, EdgeIndex other_edge_index)
+            [&](EdgeIndex self_edge_index, const EdgeWithData &self_edge, const Edge &self_transformed_edge, EdgeIndex other_edge_index)
             {
                 (void)self_edge_index;
+                (void)self_edge;
                 return self_transformed_edge.CollideWithEdgeInclusive(other.GetEdge(other_edge_index), Edge::EdgeCollisionMode::parallelRejected);
             },
             nullptr
@@ -503,17 +511,24 @@ class EdgeSoup
         [[nodiscard]] U *AllocInPool(std::size_t n = 1)
         {
             static_assert(std::is_trivially_copyable_v<U> && alignof(U) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__);
-            std::size_t this_offset = Storage::Align<alignof(U)>(*params->memory_pool_offset);
-            *params->memory_pool_offset = this_offset + sizeof(U) * n;
-            if (*params->memory_pool_offset > params.memory_pool->size())
-                params.memory_pool->resize(std::max(*params->memory_pool_offset, params.memory_pool->size() * 2));
+            std::size_t this_offset = Storage::Align<alignof(U)>(*params.memory_pool_offset);
+            *params.memory_pool_offset = this_offset + sizeof(U) * n;
+            if (*params.memory_pool_offset > params.memory_pool->size())
+                params.memory_pool->resize(std::max(*params.memory_pool_offset, params.memory_pool->size() * 2));
             return ::new((void *)(params.memory_pool->data() + this_offset)) U[n];
         }
 
+        struct CollisionCandidate
+        {
+            EdgeIndex edge_index;
+            Edge edge;
+        };
+
         struct EdgeEntry
         {
-            Edge transformed_edge;
-            std::span<const Edge> collision_candidates;
+            EdgeIndex edge_index;
+            Edge edge;
+            std::span<CollisionCandidate> collision_candidates;
         };
 
         // One entry per those self edges that can participate in the collision.
@@ -531,14 +546,14 @@ class EdgeSoup
             vector other_delta_vel = params.other_vel - params.self_vel;
 
             // Would need `next_value` here, if not for `hitbox_expansion_epsilon`.
-            vector max_distance_to_other = max((params.other_pos - params.self_pos).len(), ((params.other_pos + params.other_delta_vel) - (params.self_pos + params.self_vel)).len());
+            scalar max_distance_to_other = max((params.other_pos - params.self_pos).len(), ((params.other_pos + other_delta_vel) - (params.self_pos + params.self_vel)).len());
 
-            std::vector<
+            std::vector<EdgeIndex> temp_edges;
 
             params.self->CollideEdgeSoupLow(
                 *params.other,
-                [&](vector point){other_to_self_rot * (point - params.other_pos) + params.self_pos;},
-                [&](vector point){self_to_other_rot * (point - params.self_pos) + params.other_pos;},
+                [&](vector point){return other_to_self_rot * (point - params.other_pos) + params.self_pos;},
+                [&](vector point){return self_to_other_rot * (point - params.self_pos) + params.other_pos;},
                 [&](EdgeIndex edge_index, const EdgeWithData &edge, const Edge &transformed_edge)
                 {
                     (void)edge_index;
@@ -548,21 +563,73 @@ class EdgeSoup
                         + (edge.max_distance_to_origin + max_distance_to_other) * params.other_angular_vel_abs_upper_bound
                     );
                 },
-                [](EdgeIndex self_edge_index, const Edge &self_transformed_edge)
+                nullptr,
+                [&](EdgeIndex self_edge_index, const EdgeWithData &self_edge, const Edge &self_transformed_edge, EdgeIndex other_edge_index)
                 {
-                    #error allocate entry here
+                    (void)self_edge_index;
+                    (void)self_edge;
+                    (void)self_transformed_edge;
+                    temp_edges.push_back(other_edge_index);
                     return false;
                 },
-                [](EdgeIndex self_edge_index, const Edge &self_transformed_edge, EdgeIndex other_edge_index)
+                [&](EdgeIndex self_edge_index, const EdgeWithData &self_edge, const Edge &self_transformed_edge)
                 {
-                    #error append edge here
+                    (void)self_transformed_edge;
+                    CollisionCandidate *candidates_ptr = AllocInPool<CollisionCandidate>(temp_edges.size());
+                    edge_entries_ptr[num_edge_entries].edge_index = self_edge_index;
+                    edge_entries_ptr[num_edge_entries].edge = self_edge;
+                    edge_entries_ptr[num_edge_entries].collision_candidates = {candidates_ptr, temp_edges.size()};
+                    for (std::size_t i = 0; i < temp_edges.size(); i++)
+                        candidates_ptr[i] = {.edge_index = temp_edges[i], .edge = params.other->GetEdge(temp_edges[i])};
+                    num_edge_entries++;
+                    temp_edges.clear();
                     return false;
-                },
-                #error third lambda here
-                );
+                }
+            );
         }
 
+        // If `func` is not specified, returns true on collision.
+        // If `func` is specified, it's called for every edge collision point.
+        // If it returns true, the function stops immediately and also returns true.
+        // `func` is `()`.
+        template <typename F = std::nullptr_t>
+        bool Collide(vector self_pos, matrix self_rot, vector other_pos, matrix other_rot, F &&func = nullptr)
+        {
+            for (const EdgeEntry &entry : edge_entries)
+            {
+                Edge transformed_self_edge = entry.edge;
+                transformed_self_edge.a = self_pos + self_rot * transformed_self_edge.a;
+                transformed_self_edge.b = self_pos + self_rot * transformed_self_edge.b;
 
+                for (const CollisionCandidate &candidate : entry.collision_candidates)
+                {
+                    Edge transformed_other_edge = candidate.edge;
+                    transformed_other_edge.a = other_pos + other_rot * transformed_other_edge.a;
+                    transformed_other_edge.b = other_pos + other_rot * transformed_other_edge.b;
+                    if constexpr (std::is_null_pointer_v<F>)
+                    {
+                        if (transformed_self_edge.CollideWithEdgeInclusive(transformed_other_edge))
+                            return true;
+                    }
+                    else
+                    {
+                        bool stop = false;
+                        transformed_self_edge.CollideWithEdgeInclusive([&](scalar num_self, scalar num_other, scalar den)
+                        {
+                            if (func(
+                                entry.edge_index, entry.edge, transformed_self_edge,
+                                candidate.edge_index, candidate.edge, transformed_other_edge,
+                                num_self, num_other, den))
+                            {
+                                stop = true;
+                            }
+                        });
+                        if (stop)
+                            return true;
+                    }
+                }
+            }
+        }
     };
 
 
