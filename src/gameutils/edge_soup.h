@@ -561,14 +561,11 @@ class EdgeSoup
         {
             pool_offset_to_edge_entries = AllocInPool<EdgeEntry>(self->NumEdges());
 
-            matrix inv_other_rot = InvertRotationMatrix(params.other_rot);
             matrix inv_self_rot = InvertRotationMatrix(params.self_rot);
+            matrix inv_other_rot = InvertRotationMatrix(params.other_rot);
 
-            matrix other_to_self_rot = params.self_rot * inv_other_rot;
-            matrix self_to_other_rot = params.other_rot * inv_self_rot;
-
-            auto map_other_point_to_self = [&](vector point){return self_to_other_rot * (point - params.self_pos) + params.other_pos;};
-            auto map_self_point_to_other = [&](vector point){return other_to_self_rot * (point - params.other_pos) + params.self_pos;};
+            auto map_other_point_to_self = [&](vector point){return inv_self_rot * (params.other_rot * point + params.other_pos - params.self_pos);};
+            auto map_self_point_to_other = [&](vector point){return inv_other_rot * (params.self_rot * point + params.self_pos - params.other_pos);};
 
             // Other velocity relative to self, in world coordinates.
             vector other_delta_vel = params.other_vel - params.self_vel;
