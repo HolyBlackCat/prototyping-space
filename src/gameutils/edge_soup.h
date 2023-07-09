@@ -41,10 +41,21 @@ class EdgeSoup
             return ret;
         }
 
+        // Returns a point between `a` (t=0) and `b` (t=1).
+        [[nodiscard]] vector Point(scalar t) const requires Math::floating_point_scalar<scalar>
+        {
+            return a + (b - a) * t;
+        }
+        // Same but the position is represented by a fraction.
+        [[nodiscard]] vector Point(scalar num, scalar den) const
+        {
+            return a + (b - a) * num / den;
+        }
+
         enum class EdgeCollisionMode
         {
-            parallelUnspecified, // Parallel edges are handled in an unspecified way. (In practice, should be true if they are on the same line.)
-            parallelRejected, // Parallel edges are always considered not colliding.
+            parallel_unspecified, // Parallel edges are handled in an unspecified way. (In practice, should be true if they are on the same line.)
+            parallel_rejected, // Parallel edges are always considered not colliding.
         };
 
         // If specified, `func` is called on collision, with three parameters: `(scalar num_self, scalar num_other, scalar den) -> void`.
@@ -58,7 +69,7 @@ class EdgeSoup
             vector delta_other = other.b - other.a;
             scalar d = delta_self /cross/ delta_other;
 
-            if (mode == EdgeCollisionMode::parallelRejected && d == 0)
+            if (mode == EdgeCollisionMode::parallel_rejected && d == 0)
                 return false;
 
             scalar abs_d = abs(d);
@@ -196,7 +207,8 @@ class EdgeSoup
         if (!first)
             AddEdge({.a = prev, .b = first_point});
     }
-    void AddLoop(std::ranges::range auto &&range)
+    template <std::ranges::range R = std::initializer_list<vector>>
+    void AddLoop(R &&range)
     {
         AddLoop(std::ranges::begin(range), std::ranges::end(range));
     }
@@ -476,7 +488,7 @@ class EdgeSoup
             {
                 (void)self_edge_index;
                 (void)self_edge;
-                bool collides = self_transformed_edge.CollideWithEdgeInclusive(other.GetEdge(other_edge_index), Edge::EdgeCollisionMode::parallelRejected);
+                bool collides = self_transformed_edge.CollideWithEdgeInclusive(other.GetEdge(other_edge_index), Edge::EdgeCollisionMode::parallel_rejected);
                 IMP_EDGESOUP_DEBUG("{} to {} -> {}", typename AabbTree::NodeIndex(self_edge_index), typename AabbTree::NodeIndex(other_edge_index), collides);
                 return collides;
             },
@@ -559,6 +571,9 @@ class EdgeSoup
         EdgeSoupCollider(const EdgeSoup &new_self, const EdgeSoup &new_other, Params new_params)
             : self(&new_self), other(&new_other), params(std::move(new_params))
         {
+            ASSERT(params.self_angular_vel_abs_upper_bound >= 0);
+            ASSERT(params.other_angular_vel_abs_upper_bound >= 0);
+
             pool_offset_to_edge_entries = AllocInPool<EdgeEntry>(self->NumEdges());
 
             matrix inv_self_rot = InvertRotationMatrix(params.self_rot);
@@ -649,7 +664,14 @@ class EdgeSoup
         // If `func` is not specified, returns true on collision.
         // If `func` is specified, it's called for every edge collision point.
         // If it returns true, the function stops immediately and also returns true.
-        // `func` is `()`.
+        // `func` is `(
+        //     EdgeIndex self_edge_index, const Edge &self_edge, const Edge &world_self_edge,
+        //     EdgeIndex other_edge_index, const Edge &other_edge, const Edge &world_other_edge,
+        //     scalar num_self, scalar num_other, scalar den
+        // ) -> bool`.
+        // The first three parameters describe the self colliding edge. The next three parameters describe the other colliding edge.
+        // The `world_*` parameters receive edges transformed to world coorinates.
+        // The last three parameters describe the collision point as for `Edge::CollideWithEdgeInclusive()`.
         template <typename F = std::nullptr_t>
         bool Collide(vector self_pos, matrix self_rot, vector other_pos, matrix other_rot, F &&func = nullptr)
         {
@@ -661,10 +683,10 @@ class EdgeSoup
                 const EdgeEntry &entry = edge_entries_ptr[i];
                 IMP_EDGESOUP_DEBUG("edge {}", typename AabbTree::NodeIndex(entry.edge_index));
 
-                Edge transformed_self_edge = entry.edge;
-                transformed_self_edge.a = self_pos + self_rot * transformed_self_edge.a;
-                transformed_self_edge.b = self_pos + self_rot * transformed_self_edge.b;
-                IMP_EDGESOUP_DEBUG("{}-{} -> {}-{}", entry.edge.a, entry.edge.b, transformed_self_edge.a, transformed_self_edge.b);
+                Edge world_self_edge = entry.edge;
+                world_self_edge.a = self_pos + self_rot * world_self_edge.a;
+                world_self_edge.b = self_pos + self_rot * world_self_edge.b;
+                IMP_EDGESOUP_DEBUG("{}-{} -> {}-{}", entry.edge.a, entry.edge.b, world_self_edge.a, world_self_edge.b);
 
                 const CollisionCandidate *candidates_ptr = std::launder(reinterpret_cast<const CollisionCandidate *>(params.memory_pool->data() + entry.pool_offset_to_collision_candidates));
 
@@ -674,23 +696,23 @@ class EdgeSoup
 
                     IMP_EDGESOUP_DEBUG("  candidate {}", typename AabbTree::NodeIndex(candidate.edge_index));
 
-                    Edge transformed_other_edge = candidate.edge;
-                    transformed_other_edge.a = other_pos + other_rot * transformed_other_edge.a;
-                    transformed_other_edge.b = other_pos + other_rot * transformed_other_edge.b;
-                    IMP_EDGESOUP_DEBUG("{}-{} -> {}-{}", candidate.edge.a, candidate.edge.b, transformed_other_edge.a, transformed_other_edge.b);
+                    Edge world_other_edge = candidate.edge;
+                    world_other_edge.a = other_pos + other_rot * world_other_edge.a;
+                    world_other_edge.b = other_pos + other_rot * world_other_edge.b;
+                    IMP_EDGESOUP_DEBUG("{}-{} -> {}-{}", candidate.edge.a, candidate.edge.b, world_other_edge.a, world_other_edge.b);
                     if constexpr (std::is_null_pointer_v<F>)
                     {
-                        if (transformed_self_edge.CollideWithEdgeInclusive(transformed_other_edge, Edge::EdgeCollisionMode::parallelRejected))
+                        if (world_self_edge.CollideWithEdgeInclusive(world_other_edge, Edge::EdgeCollisionMode::parallel_rejected))
                             return true;
                     }
                     else
                     {
                         bool stop = false;
-                        transformed_self_edge.CollideWithEdgeInclusive([&](scalar num_self, scalar num_other, scalar den)
+                        (void)world_self_edge.CollideWithEdgeInclusive(world_other_edge, Edge::EdgeCollisionMode::parallel_rejected, [&](scalar num_self, scalar num_other, scalar den)
                         {
                             if (func(
-                                entry.edge_index, entry.edge, transformed_self_edge,
-                                candidate.edge_index, candidate.edge, transformed_other_edge,
+                                entry.edge_index, entry.edge, world_self_edge,
+                                candidate.edge_index, candidate.edge, world_other_edge,
                                 num_self, num_other, den))
                             {
                                 stop = true;
