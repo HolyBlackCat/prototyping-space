@@ -481,8 +481,47 @@ TEST_CASE("edge_soup.soup_to_soup")
         });
         // Two axis offset. Two collision points.
         Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(4,4), 0, fvec2(), 0, {
-            {.pos = fvec2( 4, 4), .self_edge = 3, .other_edge = 0},
-            {.pos = fvec2( 4, 4), .self_edge = 0, .other_edge = 3},
+            {.pos = fvec2( 4, 0), .self_edge = 3, .other_edge = 2},
+            {.pos = fvec2( 0, 4), .self_edge = 0, .other_edge = 1},
         });
+    }
+
+    { // Movement.
+        T shape_a;
+        shape_a.AddLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
+
+        T shape_b;
+        shape_b.AddLoop({fvec2(3,0),fvec2(0,3),fvec2(-3,0),fvec2(0,-3)});
+
+        for (int rot_index_a = 0; rot_index_a < 4; rot_index_a++)
+        for (int rot_index_b = 0; rot_index_b < 4; rot_index_b++)
+        {
+            CAPTURE(rot_index_a);
+            CAPTURE(rot_index_b);
+
+            float angle_a = rot_index_a * f_pi / 2;
+            float angle_b = rot_index_b * f_pi / 2;
+
+            int a0 = (4 - rot_index_a) % 4;
+            int a1 = (5 - rot_index_a) % 4;
+            int a2 = (6 - rot_index_a) % 4;
+            int a3 = (7 - rot_index_a) % 4;
+            int b0 = (4 - rot_index_b) % 4;
+            int b1 = (5 - rot_index_b) % 4;
+            int b2 = (6 - rot_index_b) % 4;
+            int b3 = (7 - rot_index_b) % 4;
+
+            // No movement.
+            Collide(shape_a, shape_b, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-5,0), angle_b, fvec2(), 0, {
+                {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+            });
+
+            // Approaching fixed body.
+            Collide(shape_a, shape_b, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-25,0), angle_b, fvec2(20,0), 0, {
+                {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+            });
+        }
     }
 }
