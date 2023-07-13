@@ -495,35 +495,162 @@ TEST_CASE("edge_soup.soup_to_soup")
         T shape_b;
         shape_b.AddLoop({fvec2(3,0),fvec2(0,3),fvec2(-3,0),fvec2(0,-3)});
 
+        T shape_b_offset;
+        shape_b_offset.AddLoop({fvec2(20+3,0),fvec2(20,3),fvec2(20-3,0),fvec2(20,-3)});
+
         for (int rot_index_a = 0; rot_index_a < 4; rot_index_a++)
-        for (int rot_index_b = 0; rot_index_b < 4; rot_index_b++)
         {
             CAPTURE(rot_index_a);
-            CAPTURE(rot_index_b);
-
             float angle_a = rot_index_a * f_pi / 2;
-            float angle_b = rot_index_b * f_pi / 2;
 
-            int a0 = (4 - rot_index_a) % 4;
-            int a1 = (5 - rot_index_a) % 4;
-            int a2 = (6 - rot_index_a) % 4;
-            int a3 = (7 - rot_index_a) % 4;
-            int b0 = (4 - rot_index_b) % 4;
-            int b1 = (5 - rot_index_b) % 4;
-            int b2 = (6 - rot_index_b) % 4;
-            int b3 = (7 - rot_index_b) % 4;
+            [[maybe_unused]] int
+                a0 = (4 - rot_index_a) % 4,
+                a1 = (5 - rot_index_a) % 4,
+                a2 = (6 - rot_index_a) % 4,
+                a3 = (7 - rot_index_a) % 4;
 
-            // No movement.
-            Collide(shape_a, shape_b, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-5,0), angle_b, fvec2(), 0, {
-                {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
-                {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+            for (int rot_index_b = 0; rot_index_b < 4; rot_index_b++)
+            {
+                CAPTURE(rot_index_b);
+                float angle_b = rot_index_b * f_pi / 2;
+
+                [[maybe_unused]] int
+                    b0 = (4 - rot_index_b) % 4,
+                    b1 = (5 - rot_index_b) % 4,
+                    b2 = (6 - rot_index_b) % 4,
+                    b3 = (7 - rot_index_b) % 4;
+
+                // No movement.
+                Collide(shape_a, shape_b, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-5,0), angle_b, fvec2(), 0, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+                });
+                Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), angle_a, fvec2(-5,0), 0, fvec2(), angle_b, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+                });
+
+                // Approaching fixed body.
+                Collide(shape_a, shape_b, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-25,0), angle_b, fvec2(20,0), 0, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+                });
+                Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), angle_a, fvec2(-25,0), 0, fvec2(20,0), angle_b, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+                });
+
+                // Overshooting fixed body.
+                Collide(shape_a, shape_b, 0.5f, fvec2(), angle_a, fvec2(), 0, fvec2(-25,0), angle_b, fvec2(40,0), 0, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+                });
+                Collide(shape_a, shape_b, 0.5f, fvec2(), 0, fvec2(), angle_a*2, fvec2(-25,0), 0, fvec2(40,0), angle_b*2, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+                });
+            }
+
+            // Offset body.
+
+            // No collision.
+            Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(), 0, fvec2(), 0, {});
+
+            // Collision without movement.
+            Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-25,0), 0, fvec2(), 0, {
+                {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
             });
 
-            // Approaching fixed body.
-            Collide(shape_a, shape_b, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-25,0), angle_b, fvec2(20,0), 0, {
-                {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
-                {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+            // Collision with straight movement.
+            Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-45,0), 0, fvec2(20,0), 0, {
+                {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
             });
+            // Collision with sideways movement.
+            Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-25,-20), 0, fvec2(0,20), 0, {
+                {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+            });
+            Collide(shape_a, shape_b_offset, 0.5f, fvec2(), angle_a, fvec2(), 0, fvec2(-25,-20), 0, fvec2(0,40), 0, {
+                {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+            });
+            // Collision with diagonal movement.
+            Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-55,-20), 0, fvec2(30,20), 0, {
+                {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+            });
+
+            { // Only rotation.
+                // Collision at t=0.
+                Collide(shape_a, shape_b_offset, 0, fvec2(), angle_a, fvec2(), 0, fvec2(-25,0), 0, fvec2(), f_pi, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+                });
+
+                // Collision at t=0.5, quarter circle.
+                Collide(shape_a, shape_b_offset, 0.5f, fvec2(), angle_a, fvec2(), 0, fvec2(0,-25), 0, fvec2(), f_pi, {
+                    {.pos = fvec2( 2,-4), .self_edge = a2, .other_edge = 3},
+                    {.pos = fvec2(-2,-4), .self_edge = a2, .other_edge = 0},
+                });
+                // Collision at t=0.5, quarter circle, starting from a rotated position.
+                Collide(shape_a, shape_b_offset, 0.5f, fvec2(), angle_a, fvec2(), 0, fvec2(-25,0), -f_pi/2, fvec2(), f_pi, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+                });
+
+                // Collision at t=1, quarter circle.
+                Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(0,-25), 0, fvec2(), f_pi/2, {
+                    {.pos = fvec2( 2,-4), .self_edge = a2, .other_edge = 3},
+                    {.pos = fvec2(-2,-4), .self_edge = a2, .other_edge = 0},
+                });
+                // Collision at t=1, quarter circle, starting from a rotated position.
+                Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-25,0), -f_pi/2, fvec2(), f_pi/2, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+                });
+
+                // Collision at t=1, half circle.
+                Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(25,0), 0, fvec2(), f_pi, {
+                    {.pos = fvec2( 4, 2), .self_edge = a3, .other_edge = 3},
+                    {.pos = fvec2( 4,-2), .self_edge = a3, .other_edge = 0},
+                });
+                // Collision at t=1, quarter circle, starting from a rotated position.
+                Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-25,0), -f_pi, fvec2(), f_pi, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+                });
+            }
+
+            { // Rotation with movement.
+                // Sideways slap.
+                Collide(shape_a, shape_b_offset, 0.5f, fvec2(), angle_a, fvec2(), 0, fvec2(-25,-20), -f_pi/2, fvec2(0,40), f_pi, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+                });
+                Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-25,-20), -f_pi/2, fvec2(0,20), f_pi/2, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+                });
+
+                // Forward slap.
+                Collide(shape_a, shape_b_offset, 0.5f, fvec2(), angle_a, fvec2(), 0, fvec2(-45,0), -f_pi/2, fvec2(40,0), f_pi, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+                });
+
+                // Forward touch, starting a quarter circle back.
+                Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-45,0), -f_pi/2, fvec2(20,0), f_pi/2, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+                });
+                // Forward touch, starting a half circle back.
+                Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-45,0), -f_pi, fvec2(20,0), f_pi, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+                });
+            }
         }
     }
 }
