@@ -11,7 +11,7 @@
 #include "utils/alignment.h"
 #include "utils/mat.h"
 
-#define IMP_CONTOUR_DEBUG(...) // (std::cout << FMT(__VA_ARGS__) << '\n')
+#define IMP_CONTOUR_DEBUG(...) (std::cout << FMT(__VA_ARGS__) << '\n')
 
 // Represents a 2D contour.
 // The edges are stored independently* of each other, in an AABB tree.
@@ -449,19 +449,23 @@ class EdgeSoup
     // A simple one-time collision between two edge soups.
     // Only edges are tested. If you want to test for a complete overlap, a separate test is needed.
     // `self_matrix` can only contain rotation and mirroring.
-    [[nodiscard]] bool CollideEdgeSoupSimple(const EdgeSoup &other, vector self_offset, matrix self_matrix) const
+    [[nodiscard]] bool CollideEdgeSoupSimple(const EdgeSoup &other, vector other_offset, matrix other_matrix) const
     {
-        matrix inv_matrix = InvertRotationMatrix(self_matrix.transpose());
+        IMP_CONTOUR_DEBUG("------------------------------- simple shape to shape collision:");
+
+        matrix inv_matrix = InvertRotationMatrix(other_matrix);
         return CollideEdgeSoupLow(other,
-            [&](vector v){return inv_matrix * (v - self_offset);},
-            [&](vector v){return self_matrix * v + self_offset;},
+            [&](vector v){return other_matrix * v + other_offset;},
+            [&](vector v){return inv_matrix * (v - other_offset);},
             nullptr,
             nullptr,
             [&](EdgeIndex self_edge_index, const EdgeWithData &self_edge, const Edge &self_transformed_edge, EdgeIndex other_edge_index)
             {
                 (void)self_edge_index;
                 (void)self_edge;
-                return self_transformed_edge.CollideWithEdgeInclusive(other.GetEdge(other_edge_index), Edge::EdgeCollisionMode::parallelRejected);
+                bool collides = self_transformed_edge.CollideWithEdgeInclusive(other.GetEdge(other_edge_index), Edge::EdgeCollisionMode::parallelRejected);
+                IMP_CONTOUR_DEBUG("{} to {} -> {}", typename AabbTree::NodeIndex(self_edge_index), typename AabbTree::NodeIndex(other_edge_index), collides);
+                return collides;
             },
             nullptr
         );
@@ -473,14 +477,12 @@ class EdgeSoup
       public:
         struct Params
         {
+            // This is used during construction, and then must be kept alive for all subsequent collision tests.
             // We use this to store the temporary edge lists. The old value is ignored.
             // We increase the size of the vector if it's not large enough.
             std::vector<char> *memory_pool = nullptr;
             // Current byte offset in `memory_pool`.
             std::size_t *memory_pool_offset = nullptr;
-
-            const EdgeSoup *self = nullptr;
-            const EdgeSoup *other = nullptr;
 
             // Positions.
             vector self_pos;
@@ -505,17 +507,21 @@ class EdgeSoup
             }();
         };
 
+      private:
+        const EdgeSoup *self = nullptr;
+        const EdgeSoup *other = nullptr;
         Params params;
 
         template <typename U>
-        [[nodiscard]] U *AllocInPool(std::size_t n = 1)
+        [[nodiscard]] std::size_t AllocInPool(std::size_t n = 1)
         {
             static_assert(std::is_trivially_copyable_v<U> && alignof(U) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__);
             std::size_t this_offset = Storage::Align<alignof(U)>(*params.memory_pool_offset);
             *params.memory_pool_offset = this_offset + sizeof(U) * n;
             if (*params.memory_pool_offset > params.memory_pool->size())
                 params.memory_pool->resize(std::max(*params.memory_pool_offset, params.memory_pool->size() * 2));
-            return ::new((void *)(params.memory_pool->data() + this_offset)) U[n];
+            ::new((void *)(params.memory_pool->data() + this_offset)) U[n];
+            return this_offset;
         }
 
         struct CollisionCandidate
@@ -528,17 +534,19 @@ class EdgeSoup
         {
             EdgeIndex edge_index;
             Edge edge;
-            std::span<CollisionCandidate> collision_candidates;
+            std::size_t pool_offset_to_collision_candidates = 0;
+            std::size_t num_collision_candidates = 0;
         };
 
         // One entry per those self edges that can participate in the collision.
-        std::span<const EdgeEntry> edge_entries;
+        std::size_t pool_offset_to_edge_entries = 0;
+        std::size_t num_edge_entries = 0;
 
       public:
-        EdgeSoupCollider(Params new_params) : params(std::move(new_params))
+        EdgeSoupCollider(const EdgeSoup &new_self, const EdgeSoup &new_other, Params new_params)
+            : self(&new_self), other(&new_other), params(std::move(new_params))
         {
-            EdgeEntry *edge_entries_ptr = AllocInPool<EdgeEntry>(params.self->NumEdges());
-            std::size_t num_edge_entries = 0;
+            pool_offset_to_edge_entries = AllocInPool<EdgeEntry>(self->NumEdges());
 
             matrix other_to_self_rot = params.self_rot * InvertRotationMatrix(params.other_rot);
             matrix self_to_other_rot = params.other_rot * InvertRotationMatrix(params.self_rot);
@@ -550,10 +558,10 @@ class EdgeSoup
 
             std::vector<EdgeIndex> temp_edges;
 
-            params.self->CollideEdgeSoupLow(
-                *params.other,
-                [&](vector point){return other_to_self_rot * (point - params.other_pos) + params.self_pos;},
+            self->CollideEdgeSoupLow(
+                *other,
                 [&](vector point){return self_to_other_rot * (point - params.self_pos) + params.other_pos;},
+                [&](vector point){return other_to_self_rot * (point - params.other_pos) + params.self_pos;},
                 [&](EdgeIndex edge_index, const EdgeWithData &edge, const Edge &transformed_edge)
                 {
                     (void)edge_index;
@@ -575,12 +583,15 @@ class EdgeSoup
                 [&](EdgeIndex self_edge_index, const EdgeWithData &self_edge, const Edge &self_transformed_edge)
                 {
                     (void)self_transformed_edge;
-                    CollisionCandidate *candidates_ptr = AllocInPool<CollisionCandidate>(temp_edges.size());
-                    edge_entries_ptr[num_edge_entries].edge_index = self_edge_index;
-                    edge_entries_ptr[num_edge_entries].edge = self_edge;
-                    edge_entries_ptr[num_edge_entries].collision_candidates = {candidates_ptr, temp_edges.size()};
+                    std::size_t pool_offset_to_candidates = AllocInPool<CollisionCandidate>(temp_edges.size());
+                    EdgeEntry &edge_entry = std::launder(reinterpret_cast<EdgeEntry *>(params.memory_pool->data() + pool_offset_to_edge_entries))[num_edge_entries];
+                    edge_entry.edge_index = self_edge_index;
+                    edge_entry.edge = self_edge;
+                    edge_entry.pool_offset_to_collision_candidates = pool_offset_to_candidates;
+                    edge_entry.num_collision_candidates = temp_edges.size();
+                    CollisionCandidate *candidates_ptr = std::launder(reinterpret_cast<CollisionCandidate *>(params.memory_pool->data() + pool_offset_to_candidates));
                     for (std::size_t i = 0; i < temp_edges.size(); i++)
-                        candidates_ptr[i] = {.edge_index = temp_edges[i], .edge = params.other->GetEdge(temp_edges[i])};
+                        candidates_ptr[i] = {.edge_index = temp_edges[i], .edge = other->GetEdge(temp_edges[i])};
                     num_edge_entries++;
                     temp_edges.clear();
                     return false;
@@ -595,20 +606,30 @@ class EdgeSoup
         template <typename F = std::nullptr_t>
         bool Collide(vector self_pos, matrix self_rot, vector other_pos, matrix other_rot, F &&func = nullptr)
         {
-            for (const EdgeEntry &entry : edge_entries)
+            IMP_CONTOUR_DEBUG("------------------------------- shape to shape collision in a collider:");
+
+            EdgeEntry *edge_entries_ptr = std::launder(reinterpret_cast<EdgeEntry *>(params.memory_pool->data() + pool_offset_to_edge_entries));
+            for (std::size_t i = 0; i < num_edge_entries; i++)
             {
+                const EdgeEntry &entry = edge_entries_ptr[i];
+                IMP_CONTOUR_DEBUG("edge {}", typename AabbTree::NodeIndex(entry.edge_index));
+
                 Edge transformed_self_edge = entry.edge;
                 transformed_self_edge.a = self_pos + self_rot * transformed_self_edge.a;
                 transformed_self_edge.b = self_pos + self_rot * transformed_self_edge.b;
 
-                for (const CollisionCandidate &candidate : entry.collision_candidates)
+                const CollisionCandidate *candidates_ptr = std::launder(reinterpret_cast<const CollisionCandidate *>(params.memory_pool->data() + entry.pool_offset_to_collision_candidates));
+
+                for (std::size_t j = 0; j < entry.num_collision_candidates; j++)
                 {
+                    const CollisionCandidate &candidate = candidates_ptr[j];
+
                     Edge transformed_other_edge = candidate.edge;
                     transformed_other_edge.a = other_pos + other_rot * transformed_other_edge.a;
                     transformed_other_edge.b = other_pos + other_rot * transformed_other_edge.b;
                     if constexpr (std::is_null_pointer_v<F>)
                     {
-                        if (transformed_self_edge.CollideWithEdgeInclusive(transformed_other_edge))
+                        if (transformed_self_edge.CollideWithEdgeInclusive(transformed_other_edge, Edge::EdgeCollisionMode::parallelRejected))
                             return true;
                     }
                     else
@@ -629,8 +650,14 @@ class EdgeSoup
                     }
                 }
             }
+
+            return false;
         }
     };
 
-
+    // Used to perform multiple near collision tests on two edge soups.
+    [[nodiscard]] EdgeSoupCollider MakeEdgeSoupCollider(const EdgeSoup &other, EdgeSoupCollider::Params params) const
+    {
+        return EdgeSoupCollider(*this, other, std::move(params));
+    }
 };
