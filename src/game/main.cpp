@@ -72,7 +72,21 @@ struct ContourDemo
         // O
         // Refl::FromString(unfinished_contour, "[(-60,-50),(-11,-68),(41,-48),(58,6),(37,51),(-15,67),(-63,49),(-85,0)]");
         // overhangs
-        Refl::FromString(unfinished_contour, "[(-26,-121),(12,-46),(-9,-40),(10,-6),(-11,-6),(9,28),(-8,23),(7,56),(-6,56),(-17,31),(-34,119),(-100,128),(-102,-128)]");
+        // Refl::FromString(unfinished_contour, "[(-26,-121),(12,-46),(-9,-40),(10,-6),(-11,-6),(9,28),(-8,23),(7,56),(-6,56),(-17,31),(-34,119),(-100,128),(-102,-128)]");
+
+        shape.AddLoop(std::array{
+            ivec2( 6, 0)*10,
+            ivec2(12, 6)*10,
+            ivec2( 6,12)*10,
+            ivec2( 0, 6)*10,
+        });
+        // Hole:
+        shape.AddLoop(std::array{
+            ivec2( 2, 6)*10,
+            ivec2( 6,10)*10,
+            ivec2(10, 6)*10,
+            ivec2( 6, 2)*10,
+        });
 
         AddUnfinishedContourToShape();
     }
@@ -95,7 +109,8 @@ struct ContourDemo
             bool collides = false;
             if (unfinished_contour.empty())
             {
-                auto collider = shape.MakeCollider(mouse.pos());
+                // auto collider = shape.MakeCollider(mouse.pos());
+                auto collider = shape.MakeCollider(ivec2(0));
                 collides = collider.CollidePoint(mouse.pos());
 
                 r.fquad(mouse.pos() + 0.5f, fvec2(32, 1)).center(fvec2(0.5f)).rotate(collider.DebugRayDirection() * f_pi / 2).color(fvec3(0,0,1));
