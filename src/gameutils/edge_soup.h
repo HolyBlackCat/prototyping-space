@@ -2,11 +2,14 @@
 
 #include <algorithm>
 #include <iterator>
+#include <new>
 #include <ranges>
+#include <span>
 
-#include <program/errors.h>
-#include <utils/aabb_tree.h>
-#include <utils/mat.h>
+#include "program/errors.h"
+#include "utils/aabb_tree.h"
+#include "utils/alignment.h"
+#include "utils/mat.h"
 
 #define IMP_CONTOUR_DEBUG(...) // (std::cout << FMT(__VA_ARGS__) << '\n')
 
@@ -22,6 +25,7 @@ class EdgeSoup
   public:
     using scalar = T;
     using vector = vec2<T>;
+    using matrix = mat2<T>;
     using rect = rect2<T>;
 
     struct Edge
@@ -62,13 +66,55 @@ class EdgeSoup
         }
     };
 
-    using AabbTree = AabbTree<vec2<T>, Edge>;
-    using EdgeIndex = typename AabbTree::NodeIndex;
+    struct EdgeWithData : Edge
+    {
+        int dense_index = 0; // 0 <= ... < NumEdges()
 
-    static constexpr EdgeIndex null_index = AabbTree::null_index;
+        // How far the edge is from the local origin. The maximum of the two points' distances is used.
+        // For integral `T`s, an upper bound approximation is used.
+        scalar max_distance_to_origin = 0;
+    };
+
+    using AabbTree = AabbTree<vec2<T>, EdgeWithData>;
+    enum class EdgeIndex : typename AabbTree::NodeIndex {};
+
+    static constexpr EdgeIndex null_index = EdgeIndex(AabbTree::null_index);
+
+    // For integral `T`s, an upper bound approximation is used.
+    [[nodiscard]] static scalar VertexDistanceToOrigin(vector point)
+    {
+        if constexpr (Math::floating_point_scalar<T>)
+        {
+            return point.len();
+        }
+        else
+        {
+            // *looks at butterfly* Is this a distance approximation?
+            return point.abs().sum();
+        }
+    }
+
+    // This is precomputed and stored in edges as `.max_distance_to_origin`.
+    [[nodiscard]] static scalar MaxEdgeDistanceToOrigin(Edge edge)
+    {
+        return max(VertexDistanceToOrigin(edge.a), VertexDistanceToOrigin(edge.b));
+    }
+
+    // "Inverts" the rotation matrix `m`.
+    // In practice, merely transposes it, for speed.
+    [[nodiscard]] static matrix InvertRotationMatrix(matrix m)
+    {
+        // Good enough for rotation and/or mirror matrices.
+        // Also does work for integral `T`s, unlike `.inverse()`.
+        return m.transpose();
+    }
 
   private:
     AabbTree aabb_tree;
+
+    // NOTE: The elements here are `EdgeIndex`es, and their indices is what's stored in `EdgeWithData::dense_index`.
+    // This is not exactly intuitive.
+    SparseSet<int> dense_edge_indices;
 
   public:
     constexpr EdgeSoup() : aabb_tree(typename AabbTree::Params(vector(0))) {}
@@ -78,6 +124,12 @@ class EdgeSoup
         return aabb_tree.IsEmpty();
     }
 
+    // The exact number of edges.
+    [[nodiscard]] int NumEdges() const
+    {
+        return dense_edge_indices.ElemCount();
+    }
+
     // Returns the shape bounds. Those may or may not be slightly larger than the actual shape.
     // Returns a default-constructed rect if the shape is empty.
     [[nodiscard]] rect Bounds() const
@@ -85,11 +137,37 @@ class EdgeSoup
         return aabb_tree.Bounds();
     }
 
+    // Returns the edge by index.
+    [[nodiscard]] const EdgeWithData &GetEdge(EdgeIndex edge_index) const
+    {
+        return aabb_tree.GetNodeUserData(typename AabbTree::NodeIndex(edge_index));
+    }
+
+    // Returns `EdgeIndex` (which are not consecutive) from a consecutive index (which are `0 <= ... < NumEdges()`).
+    // Raises a debug assertion if the index is invalid.
+    [[nodiscard]] EdgeIndex GetEdgeIndex(int dense_edge_index) const
+    {
+        return EdgeIndex(dense_edge_indices.GetElem(dense_edge_index));
+    }
+
     // Inserts a new edge.
     // Save the index to be able to remove it later.
+    // NOTE: Those indices are not consecutive, that's why `EdgeIndex` is a `enum class`.
+    // For consecutive indices, use `GetEdge(edge_index).dense_index`.
     EdgeIndex AddEdge(Edge edge)
     {
-        return aabb_tree.AddNode(edge.Bounds(), edge);
+        EdgeWithData edge_with_data;
+        edge_with_data.Edge::operator=(edge);
+        edge_with_data.max_distance_to_origin = MaxEdgeDistanceToOrigin(edge_with_data);
+        dense_edge_indices.Insert(dense_edge_indices.ElemCount()); // Sic.
+        auto ret = aabb_tree.AddNode(edge.Bounds(), std::move(edge_with_data));
+
+        // `SparseSet` doesn't auto-increase capacity.
+        // Since `AabbTree::AddNode()` already calculates a suitable capacity, we just reuse it here.
+        dense_edge_indices.Reserve(aabb_tree.Nodes().Capacity());
+        dense_edge_indices.Insert(ret);
+
+        return EdgeIndex(ret);
     }
 
     // Adds an edge loop from the vertices.
@@ -118,10 +196,13 @@ class EdgeSoup
     }
 
     // Removes an edge by index.
-    // Returns false if no such edge.
-    bool RemoveEdge(EdgeIndex index)
+    // Raises a debug assertion if no such edge.
+    void RemoveEdge(EdgeIndex edge_index)
     {
-        return aabb_tree.RemoveNode(index);
+        [[maybe_unused]] bool ok = dense_edge_indices.EraseUnordered(AabbTree::NodeIndex(edge_index)); // Sic.
+        ASSERT(ok);
+        ok = aabb_tree.RemoveNode(typename AabbTree::NodeIndex(edge_index));
+        ASSERT(ok);
     }
 
     // Get the AABB tree of edges, mostly for debug purposes.
@@ -171,16 +252,16 @@ class EdgeSoup
                 ray_aabb.b[ray_vertical] = bounds.b[ray_vertical];
 
             int counter = 0;
-            target->aabb_tree.CollideAabb(ray_aabb, [&](AabbTree::NodeIndex edge_index) -> bool
+            target->aabb_tree.CollideAabb(ray_aabb, [&](typename AabbTree::NodeIndex edge_index_raw) -> bool
             {
-                const Edge &edge = target->aabb_tree.GetNodeUserData(edge_index);
+                const Edge &edge = target->GetEdge(EdgeIndex(edge_index_raw));
 
                 // If the edge is entirely on one side of the ray line, OR exactly on the ray line, there's no collision.
                 int a_side_sign = sign(edge.a[!ray_vertical] - point[!ray_vertical]);
                 int b_side_sign = sign(edge.b[!ray_vertical] - point[!ray_vertical]);
                 if (a_side_sign == b_side_sign)
                 {
-                    IMP_CONTOUR_DEBUG("edge {} doesn't cross the ray line", edge_index);
+                    IMP_CONTOUR_DEBUG("edge {} doesn't cross the ray line", edge_index_raw);
                     return false;
                 }
 
@@ -195,11 +276,11 @@ class EdgeSoup
                 {
                     int delta = (bool(a_side_sign) + bool(b_side_sign)) * (ray_exits_shape ? 1 : -1);
                     counter += delta;
-                    IMP_CONTOUR_DEBUG("edge {} PASSES precise collision: {:+}", edge_index, delta);
+                    IMP_CONTOUR_DEBUG("edge {} PASSES precise collision: {:+}", edge_index_raw, delta);
                     return false;
                 }
 
-                IMP_CONTOUR_DEBUG("edge {} fails precise collision (sign = {:+})", edge_index, ray_exits_shape ? 1 : -1);
+                IMP_CONTOUR_DEBUG("edge {} fails precise collision (sign = {:+})", edge_index_raw, ray_exits_shape ? 1 : -1);
 
                 return false;
             });
@@ -238,7 +319,7 @@ class EdgeSoup
     {
         rect bounds = Bounds();
 
-        int distances[4] = {
+        scalar distances[4] = {
             bounds.b.x - reference_point.x,
             bounds.b.y - reference_point.y,
             reference_point.x - bounds.a.x,
@@ -256,7 +337,7 @@ class EdgeSoup
 
     // Collides with an other edge soup.
     // Only edges are tested. If you want to test for a complete overlap, a separate test is needed.
-    template <typename AabbOrOtherToSelf, typename SelfToOther, typename AdjustBoundsInOther, typename F>
+    template <typename AabbOrOtherToSelf, typename SelfToOther, typename EdgeBoundsInOther, typename F>
     bool CollideEdgeSoupLow(
         const EdgeSoup &other,
         // If `other` is in the same coorinate system, nullptr. Otherwise,
@@ -265,9 +346,10 @@ class EdgeSoup
         AabbOrOtherToSelf &&aabb_or_other_to_self,
         // If `other` is in the same coorinate system, nullptr. Otherwise `(vec point) -> vec` that maps from self coorinates to `other`.
         SelfToOther &&self_to_other,
-        // If this is a single collision, nullptr. Otherwise `(rect bounds) -> rect` that modifies
-        // the AABBs self edges in the `other` coordinate system (normally expands them to perform series of collisions tests).
-        AdjustBoundsInOther &&adjust_bounds_in_other,
+        // If this is a single collision, nullptr. Otherwise `(EdgeIndex edge_index, const Edge &transformed_edge) -> rect`
+        // that returns the AABB of the edge in `other` coordinates. `transformed_edge` is edge at `edge_index` already transformed to those coordinates.
+        // Normally it should return `transformed_edge.Bounds()` extended in some direction, to then perform multiple collisions tests.
+        EdgeBoundsInOther &&edge_bounds_in_other,
         // This receives the possibly overlapping edge pairs.
         // `(EdgeIndex self_edge_index, const Edge &self_transformed_edge, EdgeIndex other_edge_index) -> bool`,
         // where `{self,other}_edge_index` are the respective edge indices, and `self_transformed_edge` is the self edge transformed to `other` coorinates.
@@ -301,31 +383,35 @@ class EdgeSoup
             }
         }
 
-        return aabb_tree.CollideAabb(other_bounds, [&](EdgeIndex edge_index)
+        return aabb_tree.CollideAabb(other_bounds, [&](typename AabbTree::NodeIndex edge_index_raw)
         {
-            Edge edge = aabb_tree.GetNodeUserData(edge_index);
+            const EdgeIndex edge_index = EdgeIndex(edge_index_raw);
+            Edge edge = GetEdge(edge_index);
             if constexpr (!std::is_null_pointer_v<SelfToOther>)
             {
                 edge.a = self_to_other(edge.a);
                 edge.b = self_to_other(edge.b);
             }
-            rect edge_bounds = edge.Bounds();
-            if constexpr (!std::is_null_pointer_v<AdjustBoundsInOther>)
-                edge_bounds = adjust_bounds_in_other(edge_bounds);
 
-            return other.EdgeTree().CollideAabb(edge_bounds, [&](EdgeIndex other_edge_index)
+            rect edge_bounds;
+            if constexpr (std::is_null_pointer_v<EdgeBoundsInOther>)
+                edge_bounds = edge.Bounds();
+            else
+                edge_bounds = edge_bounds_in_other(edge_index, edge);
+
+            return other.EdgeTree().CollideAabb(edge_bounds, [&](typename AabbTree::NodeIndex other_edge_index)
             {
-                return receive_edge_pairs(edge_index, edge, other_edge_index);
+                return receive_edge_pairs(edge_index, edge, EdgeIndex(other_edge_index));
             });
         });
     }
 
     // A simple one-time collision between two edge soups.
     // Only edges are tested. If you want to test for a complete overlap, a separate test is needed.
-    // `self_matrix` can only contain rotation and flips.
-    [[nodiscard]] bool CollideEdgeSoupSimple(const EdgeSoup &other, vector self_offset, mat2<scalar> self_matrix) const
+    // `self_matrix` can only contain rotation and mirroring.
+    [[nodiscard]] bool CollideEdgeSoupSimple(const EdgeSoup &other, vector self_offset, matrix self_matrix) const
     {
-        mat2<scalar> inv_matrix = self_matrix.transpose();
+        matrix inv_matrix = InvertRotationMatrix(self_matrix.transpose);
         return CollideEdgeSoupLow(other,
             [&](vector v){return inv_matrix * (v - self_offset);},
             [&](vector v){return self_matrix * v + self_offset;},
@@ -333,8 +419,71 @@ class EdgeSoup
             [&](EdgeIndex self_edge_index, const Edge &self_transformed_edge, EdgeIndex other_edge_index)
             {
                 (void)self_edge_index;
-                return self_transformed_edge.CollideWithEdgeInclusive(other.EdgeTree().GetNodeUserData(other_edge_index), Edge::EdgeCollisionMode::parallelRejected);
+                return self_transformed_edge.CollideWithEdgeInclusive(other.GetEdge(other_edge_index), Edge::EdgeCollisionMode::parallelRejected);
             }
         );
     }
+
+    // Performs multiple near collision tests on two edge soups.
+    class EdgeSoupCollider
+    {
+      public:
+        struct Params
+        {
+            // We use this to store the temporary edge lists. The old value is ignored.
+            // We increase the size of the vector if it's not large enough.
+            std::vector<char> *memory_pool = nullptr;
+            // Current byte offset in `memory_pool`.
+            std::size_t *memory_pool_offset = nullptr;
+
+            const EdgeSoup *self = nullptr;
+            const EdgeSoup *other = nullptr;
+
+            // Other position relative to self.
+            vector other_delta_pos;
+            // Other velocity relative to self.
+            vector other_delta_vel;
+
+            // Rotation matrixes. Can include mirroring.
+            matrix self_rot;
+            matrix other_rot;
+
+            // Angular velocity in radians, absolute. Can be larger than the true value.
+            scalar self_angular_vel_abs_upper_bound = 0;
+            scalar other_angular_vel_abs_upper_bound = 0;
+        };
+
+        Params params;
+
+        template <typename U>
+        [[nodiscard]] U *AllocInPool(std::size_t n = 1)
+        {
+            static_assert(std::is_trivially_copyable_v<U> && alignof(U) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__);
+            std::size_t this_offset = Storage::Align<alignof(U)>(*params->memory_pool_offset);
+            *params->memory_pool_offset = this_offset + sizeof(U) * n;
+            if (*params->memory_pool_offset > params.memory_pool->size())
+                params.memory_pool->resize(std::max(*params->memory_pool_offset, params.memory_pool->size() * 2));
+            return ::new((void *)(params.memory_pool->data() + this_offset)) U[n];
+        }
+
+        struct EdgeEntry
+        {
+            Edge transformed_edge;
+            std::span<const Edge> collision_candidates;
+        };
+
+        // One entry per those self edges that can participate in the collision.
+        std::span<const EdgeEntry> edge_entries;
+
+      public:
+        EdgeSoupCollider(Params params) : params(std::move(params))
+        {
+            EdgeEntry *edge_entries_ptr = AllocInPool<EdgeEntry>(params.self->NumEdges());
+            #error continue
+        }
+
+
+    };
+
+
 };

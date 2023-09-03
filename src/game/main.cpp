@@ -29,6 +29,9 @@ Input::Mouse mouse;
 Random::DefaultGenerator random_generator = Random::MakeGeneratorFromRandomDevice();
 Random::DefaultInterfaces<Random::DefaultGenerator> ra(random_generator);
 
+template class EdgeSoup<int>;
+template class EdgeSoup<float>;
+
 struct ContourDemo
 {
     using Shape = EdgeSoup<int>;
@@ -83,10 +86,10 @@ struct ContourDemo
         // hook
         // Refl::FromString(unfinished_contour, "[(-67,31),(-67,14),(-34,25),(-8,10),(-8,-37),(-17,-49),(1,-38),(10,20),(-27,48)]");
 
-        // Refl::FromString(unfinished_contour, "[(56,-49),(-1,-59),(-10,-12),(44,-4),(58,21),(-35,6),(-21,-81),(70,-65)]"); // flipped C
+        Refl::FromString(unfinished_contour, "[(56,-49),(-1,-59),(-10,-12),(44,-4),(58,21),(-35,6),(-21,-81),(70,-65)]"); // flipped C
         AddUnfinishedContourToShape();
 
-        // Refl::FromString(unfinished_contour, "[(-67,31),(-67,14),(-34,25),(-8,10),(-8,-37),(-17,-49),(1,-38),(10,20),(-27,48)]"); // hook
+        Refl::FromString(unfinished_contour, "[(-67,31),(-67,14),(-34,25),(-8,10),(-8,-37),(-17,-49),(1,-38),(10,20),(-27,48)]"); // hook
         AddUnfinishedContourToShape(&other_shape);
     }
 
@@ -121,9 +124,9 @@ struct ContourDemo
 
             r.fquad(shape.Bounds()).color(fvec3(1,1,1)).alpha(0.1f);
 
-            shape.EdgeTree().CollideCustom([](auto &&){return true;}, [&](Shape::EdgeIndex e)
+            shape.EdgeTree().CollideCustom([](auto &&){return true;}, [&](Shape::AabbTree::NodeIndex e)
             {
-                const auto &edge = shape.EdgeTree().GetNodeUserData(e);
+                const auto &edge = shape.GetEdge(Shape::EdgeIndex(e));
                 DrawLineWithNormal(edge.a, edge.b, collides ? fvec3(1,0,1) : fvec3(1,1,1));
                 for (int i = 0; i < 4; i++)
                     r.itext((edge.a + edge.b) / 2 + ivec2::dir4(i), Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(0,0,0));
@@ -133,9 +136,9 @@ struct ContourDemo
         }
 
         { // Other shape.
-            other_shape.EdgeTree().CollideCustom([&](auto &&){return true;}, [&](Shape::EdgeIndex e)
+            other_shape.EdgeTree().CollideCustom([&](auto &&){return true;}, [&](Shape::AabbTree::NodeIndex e)
             {
-                auto edge = other_shape.EdgeTree().GetNodeUserData(e);
+                Shape::Edge edge = other_shape.GetEdge(Shape::EdgeIndex(e));
                 edge.a = other_matrix * edge.a;
                 edge.b = other_matrix * edge.b;
                 edge.a += other_pos;
