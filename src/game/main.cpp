@@ -56,14 +56,17 @@ struct ContourDemo
         fvec2 center = (a + b) / 2;
         DrawLine(center, center + (b - a).rot90(-1).norm() * 8, color, alpha);
     }
-    void DrawShape(const Shape &target_shape, Shape::vector target_pos, Shape::matrix target_rot, fvec3 color, float alpha = 1) const
+    void DrawShape(bool draw_aabb, const Shape &target_shape, Shape::vector target_pos, Shape::matrix target_rot, fvec3 color, float alpha = 1) const
     {
         auto bounds = target_shape.Bounds().to_contour();
         for (auto &vertex : bounds)
             vertex = target_rot * vertex + target_pos;
 
-        r.ftriangle(bounds[0], bounds[1], bounds[3]).color(fvec3(1,1,1)).alpha(0.1f);
-        r.ftriangle(bounds[1], bounds[2], bounds[3]).color(fvec3(1,1,1)).alpha(0.1f);
+        if (draw_aabb)
+        {
+            r.ftriangle(bounds[0], bounds[1], bounds[3]).color(fvec3(1,1,1)).alpha(0.1f);
+            r.ftriangle(bounds[1], bounds[2], bounds[3]).color(fvec3(1,1,1)).alpha(0.1f);
+        }
 
         target_shape.EdgeTree().CollideCustom([&](auto &&){return true;}, [&](Shape::AabbTree::NodeIndex e)
         {
@@ -161,7 +164,7 @@ struct ContourDemo
 
                 // Shape collision with offset.
                 int num_steps = 8;
-                vector other_vel(20, 10);
+                vector other_vel(40, 20);
 
                 std::vector<char> memory;
                 std::size_t memory_pos = 0;
@@ -194,10 +197,10 @@ struct ContourDemo
                 }
             }
 
-            DrawShape(shape, vector{}, matrix{}, collides ? fvec3(1,0,1) : fvec3(1,1,1));
+            DrawShape(true, shape, vector{}, matrix{}, collides ? fvec3(1,0,1) : fvec3(1,1,1));
 
-            DrawShape(other_shape, other_pos + other_offset, other_matrix, fvec3(0.2f, 0.2f, 0.2f));
-            DrawShape(other_shape, other_pos, other_matrix, fvec3(0,0.5f,1));
+            DrawShape(false, other_shape, other_pos + other_offset, other_matrix, fvec3(0.2f, 0.2f, 0.2f));
+            DrawShape(true, other_shape, other_pos, other_matrix, fvec3(0,0.5f,1));
         }
 
         { // Unfinished contour.
