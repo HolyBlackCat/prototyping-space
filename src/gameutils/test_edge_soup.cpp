@@ -327,7 +327,7 @@ TEST_CASE("edge_soup.point_to_soup.pixelperfect.axis_aligned")
 }
 
 // Different kinds of overhangs.
-TEST_CASE("edge_soup.overhands")
+TEST_CASE("edge_soup.point_to_soup.pixelperfect.overhands")
 {
     EdgeSoup<int> c;
     c.AddClosedLoop(std::array{
@@ -433,38 +433,93 @@ TEST_CASE("edge_soup.overhands")
 // Single edge to edge collisions.
 TEST_CASE("edge_soup.edge_to_edge")
 {
-    using T = EdgeSoup<int>;
+    using T [[maybe_unused]] = EdgeSoup<int>;
 
     // True intersection.
-    REQUIRE(T::Edge{ivec2(9, 20), ivec2(11,20)}.CollideWithEdge({ivec2(10,19), ivec2(10,21)}));
+    REQUIRE(T::Edge{ivec2(9,20), ivec2(11,20)}.CollideWithEdge({ivec2(10,19), ivec2(10,21)}));
 
     // Point 1 touches.
-    REQUIRE(T::Edge{ivec2(10, 20), ivec2(12,20)}.CollideWithEdge({ivec2(10,19), ivec2(10,21)}));
-    REQUIRE_FALSE(T::Edge{ivec2(11, 20), ivec2(12,20)}.CollideWithEdge({ivec2(10,19), ivec2(10,21)}));
+    REQUIRE(T::Edge{ivec2(10,20), ivec2(12,20)}.CollideWithEdge({ivec2(10,19), ivec2(10,21)}));
+    REQUIRE_FALSE(T::Edge{ivec2(11,20), ivec2(12,20)}.CollideWithEdge({ivec2(10,19), ivec2(10,21)}));
     // Point 2 touches.
-    REQUIRE(T::Edge{ivec2(8, 20), ivec2(11,20)}.CollideWithEdge({ivec2(10,19), ivec2(10,21)}));
-    REQUIRE_FALSE(T::Edge{ivec2(8, 20), ivec2(10,20)}.CollideWithEdge({ivec2(10,19), ivec2(10,21)}));
-    REQUIRE_FALSE(T::Edge{ivec2(8, 20), ivec2(9,20)}.CollideWithEdge({ivec2(10,19), ivec2(10,21)}));
+    REQUIRE(T::Edge{ivec2(8,20), ivec2(11,20)}.CollideWithEdge({ivec2(10,19), ivec2(10,21)}));
+    REQUIRE_FALSE(T::Edge{ivec2(8,20), ivec2(10,20)}.CollideWithEdge({ivec2(10,19), ivec2(10,21)}));
+    REQUIRE_FALSE(T::Edge{ivec2(8,20), ivec2(9,20)}.CollideWithEdge({ivec2(10,19), ivec2(10,21)}));
     // Point 3 touches.
-    REQUIRE(T::Edge{ivec2(9, 20), ivec2(11,20)}.CollideWithEdge({ivec2(10,18), ivec2(10,21)}));
-    REQUIRE_FALSE(T::Edge{ivec2(9, 20), ivec2(11,20)}.CollideWithEdge({ivec2(10,18), ivec2(10,20)}));
-    REQUIRE_FALSE(T::Edge{ivec2(9, 20), ivec2(11,20)}.CollideWithEdge({ivec2(10,18), ivec2(10,19)}));
+    REQUIRE(T::Edge{ivec2(9,20), ivec2(11,20)}.CollideWithEdge({ivec2(10,18), ivec2(10,21)}));
+    REQUIRE_FALSE(T::Edge{ivec2(9,20), ivec2(11,20)}.CollideWithEdge({ivec2(10,18), ivec2(10,20)}));
+    REQUIRE_FALSE(T::Edge{ivec2(9,20), ivec2(11,20)}.CollideWithEdge({ivec2(10,18), ivec2(10,19)}));
     // Point 4 touches.
-    REQUIRE(T::Edge{ivec2(9, 20), ivec2(11,20)}.CollideWithEdge({ivec2(10,20), ivec2(10,22)}));
-    REQUIRE_FALSE(T::Edge{ivec2(9, 20), ivec2(11,20)}.CollideWithEdge({ivec2(10,21), ivec2(10,22)}));
+    REQUIRE(T::Edge{ivec2(9,20), ivec2(11,20)}.CollideWithEdge({ivec2(10,20), ivec2(10,22)}));
+    REQUIRE_FALSE(T::Edge{ivec2(9,20), ivec2(11,20)}.CollideWithEdge({ivec2(10,21), ivec2(10,22)}));
 
-    // Parallel overlap rejected.
-    REQUIRE_FALSE(T::Edge{ivec2(10, 20), ivec2(14,20)}.CollideWithEdge({ivec2(12,20), ivec2(16,20)}));
-    // Parallel side by side.
-    REQUIRE_FALSE(T::Edge{ivec2(10, 20), ivec2(11,20)}.CollideWithEdge({ivec2(10,21), ivec2(11,21)}));
-    // Parallel, same line but no overlap.
-    REQUIRE_FALSE(T::Edge{ivec2(10, 20), ivec2(11,20)}.CollideWithEdge({ivec2(12,20), ivec2(13,20)}));
-    REQUIRE_FALSE(T::Edge{ivec2(11, 20), ivec2(10,20)}.CollideWithEdge({ivec2(12,20), ivec2(13,20)}));
-    REQUIRE_FALSE(T::Edge{ivec2(11, 20), ivec2(10,20)}.CollideWithEdge({ivec2(13,20), ivec2(12,20)}));
+    { // On the same line.
+        [[maybe_unused]] bool same_line = false;
+
+        // Exact overlap.
+        same_line = false;
+        REQUIRE_FALSE(T::Edge{ivec2(10,20), ivec2(12,20)}.CollideWithEdge({ivec2(10,20), ivec2(12,20)}, nullptr, [&]{same_line = true;}));
+        REQUIRE(same_line);
+
+        // Edge in the same direction.
+        same_line = false;
+        REQUIRE_FALSE(T::Edge{ivec2(13,20), ivec2(15,20)}.CollideWithEdge({ivec2(10,20), ivec2(12,20)}, nullptr, [&]{same_line = true;}));
+        REQUIRE(same_line);
+
+        // Edge in the opposite direction.
+        same_line = false;
+        REQUIRE_FALSE(T::Edge{ivec2(15,20), ivec2(13,20)}.CollideWithEdge({ivec2(10,20), ivec2(12,20)}, nullptr, [&]{same_line = true;}));
+        REQUIRE(same_line);
+    }
+
+    { // On parallel lines.
+        [[maybe_unused]] bool same_line = false;
+
+        // Same edge, projected to the parallel line.
+        REQUIRE_FALSE(T::Edge{ivec2(10,20), ivec2(12,20)}.CollideWithEdge({ivec2(10,21), ivec2(12,21)}, nullptr, [&]{same_line = true;}));
+
+        // Edge in the same direction.
+        REQUIRE_FALSE(T::Edge{ivec2(13,20), ivec2(15,20)}.CollideWithEdge({ivec2(10,21), ivec2(12,21)}, nullptr, [&]{same_line = true;}));
+
+        // Edge in the opposite direction.
+        REQUIRE_FALSE(T::Edge{ivec2(15,20), ivec2(13,20)}.CollideWithEdge({ivec2(10,21), ivec2(12,21)}, nullptr, [&]{same_line = true;}));
+
+        REQUIRE_FALSE(same_line);
+    }
+}
+
+// Collisions between edge soups, a minimal sanity test for `CollideEdgeSoupSimple`.
+TEST_CASE("edge_soup.soup_to_soup.simple.parallel_retries")
+{
+    using T = EdgeSoup<float>;
+
+    T shape_a;
+    shape_a.AddClosedLoop({fvec2(1,1), fvec2(-1,1), fvec2(-1,-1), fvec2(1,-1)});
+
+    // No retries.
+    REQUIRE(shape_a.CollideEdgeSoupSimple(shape_a, fvec2(1, -2), fmat2{}));
+
+    // Two parallel retries.
+    // Any of the two retries is enough for this to pass.
+    // I couldn't come up with a way to test them individually with watertight contours,
+    // so instead we use some illegal unfinished contours below.
+    // REQUIRE(shape_a.CollideEdgeSoupSimple(shape_a, fvec2(1, 2), fmat2{}));
+
+    T shape_b;
+    shape_b.Edit([](T::Editor &e)
+    {
+        e.AddEdge({fvec2(1,0), fvec2(-1,0)});
+        e.DebugForgetUnfinishedContours();
+    });
+
+    // Retry in self.
+    REQUIRE(shape_a.CollideEdgeSoupSimple(shape_b, fvec2(-1, -1), fmat2{}));
+    // Retry in other.
+    REQUIRE(shape_b.CollideEdgeSoupSimple(shape_a, fvec2(1, 1), fmat2{}));
 }
 
 // Collisions between edge soups.
-TEST_CASE("edge_soup.soup_to_soup.edges")
+TEST_CASE("edge_soup.soup_to_soup.collider")
 {
     using T = EdgeSoup<float>;
 
@@ -593,28 +648,31 @@ TEST_CASE("edge_soup.soup_to_soup.edges")
 
         // Exact match, nothing collides.
         Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(), 0, fvec2(), 0, {
-            // This stuff would collide if the edges were inclusive:
-            // {.pos = fvec2( 4, 4), .self_edge = 3, .other_edge = 0},
-            // {.pos = fvec2( 4, 4), .self_edge = 0, .other_edge = 3},
-            // {.pos = fvec2(-4, 4), .self_edge = 0, .other_edge = 1},
-            // {.pos = fvec2(-4, 4), .self_edge = 1, .other_edge = 0},
-            // {.pos = fvec2(-4,-4), .self_edge = 1, .other_edge = 2},
-            // {.pos = fvec2(-4,-4), .self_edge = 2, .other_edge = 1},
-            // {.pos = fvec2( 4,-4), .self_edge = 2, .other_edge = 3},
-            // {.pos = fvec2( 4,-4), .self_edge = 3, .other_edge = 2},
+            {.pos = fvec2( 4, 4), .self_edge = 3, .other_edge = 0},
+            {.pos = fvec2( 4, 4), .self_edge = 0, .other_edge = 3},
+            {.pos = fvec2(-4, 4), .self_edge = 0, .other_edge = 1},
+            {.pos = fvec2(-4, 4), .self_edge = 1, .other_edge = 0},
+            {.pos = fvec2(-4,-4), .self_edge = 1, .other_edge = 2},
+            {.pos = fvec2(-4,-4), .self_edge = 2, .other_edge = 1},
+            {.pos = fvec2( 4,-4), .self_edge = 2, .other_edge = 3},
+            {.pos = fvec2( 4,-4), .self_edge = 3, .other_edge = 2},
         });
         // Single axis offset. The corners of the overlapping area collide.
         Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(-4,0), 0, fvec2(), 0, {
             {.pos = fvec2( 0,-4), .self_edge = 2, .other_edge = 3},
             {.pos = fvec2(-4, 4), .self_edge = 1, .other_edge = 0},
-            // This stuff would collide if the edges were inclusive:
-            // {.pos = fvec2( 0, 4), .self_edge = 0, .other_edge = 3},
-            // {.pos = fvec2(-4,-4), .self_edge = 1, .other_edge = 2},
+            {.pos = fvec2( 0, 4), .self_edge = 0, .other_edge = 3},
+            {.pos = fvec2(-4,-4), .self_edge = 1, .other_edge = 2},
         });
         // Two axis offset. Two collision points.
         Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(4,4), 0, fvec2(), 0, {
             {.pos = fvec2( 4, 0), .self_edge = 3, .other_edge = 2},
             {.pos = fvec2( 0, 4), .self_edge = 0, .other_edge = 1},
+        });
+        // Two axis offset. Shallow corner collision.
+        Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(8,8), 0, fvec2(), 0, {
+            {.pos = fvec2( 4, 4), .self_edge = 3, .other_edge = 2},
+            {.pos = fvec2( 4, 4), .self_edge = 0, .other_edge = 1},
         });
     }
 

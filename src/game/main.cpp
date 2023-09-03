@@ -49,9 +49,10 @@ struct ContourDemo
     vector other_pos;
     matrix other_matrix;
 
-    void DrawLine(fvec2 a, fvec2 b, fvec3 color, float alpha = 1) const
+    void DrawLine(fvec2 a, fvec2 b, fvec3 color, float alpha = 1, std::optional<fvec3> second_color = {}) const
     {
-        r.fquad(a, fvec2((b - a).len(), 1)).center(fvec2(0,0.5f)).color(color).alpha(alpha).rotate((b - a).angle());
+        r.fquad(a, fvec2((b - a).len(), 1)).center(fvec2(0,0.5f)).color(color, second_color.value_or(color), second_color.value_or(color), color)
+            .alpha(alpha).rotate((b - a).angle());
     }
     void DrawLineWithNormal(fvec2 a, fvec2 b, fvec3 color, float alpha = 1) const
     {
@@ -83,7 +84,8 @@ struct ContourDemo
 
         target_shape.EdgeTree().CollideCustom([&](auto &&){return true;}, [&](Shape::AabbTree::NodeIndex e)
         {
-            Shape::Edge edge = target_shape.GetEdge(Shape::EdgeIndex(e));
+            const auto &orig_edge = target_shape.GetEdge(Shape::EdgeIndex(e));
+            Shape::Edge edge = orig_edge;
             edge.a = target_rot * edge.a;
             edge.b = target_rot * edge.b;
             edge.a += target_pos;
@@ -125,10 +127,12 @@ struct ContourDemo
 
     void Init()
     {
+        #error TODO: 1. Tests! 2. Handle the literal "corner" cases too. 3. Compute the side normals per each collision.
+
         self_pos = vector(120, 80);
         self_matrix = matrix::rotate(to_rad(-60));
 
-        other_pos = vector(-9, 77);
+        other_pos = vector(8, 46);
         // other_matrix = imat2(0,-1,1,0);
         other_matrix = matrix::rotate(to_rad(120));
 
@@ -149,7 +153,8 @@ struct ContourDemo
         Refl::FromString(unfinished_contour, "[(56,-49),(-1,-59),(-10,-12),(44,-4),(58,21),(-35,6),(-21,-81),(70,-65)]");
         AddUnfinishedContourToShape();
 
-        Refl::FromString(unfinished_contour, "[(-3,22),(-24,29),(-5,-118)]"); // rod
+        // O
+        Refl::FromString(unfinished_contour, "[(-60,-50),(-11,-68),(41,-48),(58,6),(37,51),(-15,67),(-63,49),(-85,0)]");
         AddUnfinishedContourToShape(&other_shape);
     }
 
@@ -267,12 +272,23 @@ struct ContourDemo
                 });
                 Shape::CollisionPointsAccumulator accum(shape, Shape::CollisionPointsAccumulator::Params{
                     .temp_pool = &temp_pool,
+                    .self_rot = self_matrix,
+                    .other_rot = other_matrix,
                 });
                 collider.Collide(self_pos, self_matrix, other_pos, other_matrix, [&](Shape::EdgeSoupCollider::CallbackData data) -> bool
                 {
                     accum.AddPoint(data);
                     return false;
                 });
+                persistent_pool.DestroyContent();
+                Shape::CollisionData ret = accum.Finalize(persistent_pool);
+                r.ftext(-screen_size / 2, Graphics::Text(Fonts::main, FMT(" \nbad points: {}", ret.num_lone_points))).align(ivec2(-1));
+
+                for (const auto &seg : ret.segments)
+                {
+                    DrawLine(seg.world_a, seg.world_b, fvec3(0,1,0), 1, fvec3(1,0,0));
+                    DrawLine((seg.world_a + seg.world_b) / 2, (seg.world_a + seg.world_b) / 2 + seg.world_normal * 12, fvec3(0.5f,1,0.5f));
+                }
 
                 for (auto edge_index : accum.GetEdgesWithPoints())
                 for (const auto &point : accum.GetEdgeEntry(edge_index).points)
