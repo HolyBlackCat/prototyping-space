@@ -11,7 +11,7 @@
 #include "utils/alignment.h"
 #include "utils/mat.h"
 
-#define IMP_CONTOUR_DEBUG(...) (std::cout << FMT(__VA_ARGS__) << '\n')
+#define IMP_CONTOUR_DEBUG(...) // (std::cout << FMT(__VA_ARGS__) << '\n')
 
 // Represents a 2D contour.
 // The edges are stored independently* of each other, in an AABB tree.
@@ -347,7 +347,7 @@ class EdgeSoup
     bool CollideEdgeSoupLow(
         const EdgeSoup &other,
         // If `other` is in the same coorinate system, nullptr. Otherwise,
-        // either a `rect` in self coorinate system that participates in the collision,
+        // either a `rect` in self coorinate system that participates in the collision (often, other bounds transformed to self coordinates),
         // or `(vector point) -> vector` that maps from `other` coorinates to self.
         AabbOrOtherToSelf &&aabb_or_other_to_self,
         // If `other` is in the same coorinate system, nullptr. Otherwise `(vector point) -> vector` that maps from self coorinates to `other`.
@@ -548,8 +548,11 @@ class EdgeSoup
         {
             pool_offset_to_edge_entries = AllocInPool<EdgeEntry>(self->NumEdges());
 
-            matrix other_to_self_rot = params.self_rot * InvertRotationMatrix(params.other_rot);
-            matrix self_to_other_rot = params.other_rot * InvertRotationMatrix(params.self_rot);
+            matrix inv_other_rot = InvertRotationMatrix(params.other_rot);
+            matrix inv_self_rot = InvertRotationMatrix(params.self_rot);
+
+            matrix other_to_self_rot = params.self_rot * inv_other_rot;
+            matrix self_to_other_rot = params.other_rot * inv_self_rot;
 
             vector other_delta_vel = params.other_vel - params.self_vel;
 
@@ -557,6 +560,13 @@ class EdgeSoup
             scalar max_distance_to_other = max((params.other_pos - params.self_pos).len(), ((params.other_pos + other_delta_vel) - (params.self_pos + params.self_vel)).len());
 
             std::vector<EdgeIndex> temp_edges;
+
+            rect other_aabb_in_self = [&]{
+                rect ret = other->Bounds();
+                ret = ret.expand_dir(inv_other_rot * other_delta_vel);
+                scalar other_half_outer_radius = other->Bounds().size().len() / 2;
+                ret = ret.center()
+            }();
 
             self->CollideEdgeSoupLow(
                 *other,
