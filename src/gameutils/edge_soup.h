@@ -213,7 +213,7 @@ class EdgeSoup
 
         void Finish()
         {
-            ASSERT(IsValid(), "The edge soup is not watertight after `Edit()`.");
+            ASSERT(IsComplete(), "The edge soup is not watertight after `Edit()`.");
         }
 
         // Inserts a single edge.
@@ -240,8 +240,15 @@ class EdgeSoup
         // Raises a debug assertion if no such edge.
         void RemoveEdgeLow(EdgeIndex edge_index)
         {
+            int dense_index = target->GetEdge(edge_index).dense_index;
             [[maybe_unused]] bool ok = target->dense_edge_indices.EraseUnordered(typename AabbTree::NodeIndex(edge_index)); // Sic.
             ASSERT(ok);
+
+            // Deleting the edge means we need to reassign its dense index to a different edge.
+            // That is, unless its index was equal to the number of edges.
+            if (dense_index < target->NumEdges())
+                target->GetEdgeMutable(target->GetEdgeIndex(dense_index)).dense_index = dense_index;
+
             ok = target->aabb_tree.RemoveNode(typename AabbTree::NodeIndex(edge_index));
             ASSERT(ok);
         }
@@ -364,7 +371,7 @@ class EdgeSoup
         Editor &operator=(const Editor &) = delete;
 
         // If true, the edges are currently watertight, and finishing now wouldn't produce any errors.
-        [[nodiscard]] bool IsValid() const
+        [[nodiscard]] bool IsComplete() const
         {
             return missing_prev.empty() && missing_next.empty();
         }

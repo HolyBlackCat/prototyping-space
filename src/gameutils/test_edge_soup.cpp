@@ -10,8 +10,16 @@ TEST_CASE("edge_soup.editor")
 {
     using T = EdgeSoup<int>;
 
-    auto AssertCorrectness = [](const T &soup)
+    static constexpr auto CheckDenseIndices = [](const T &soup)
     {
+        for (int i = 0; i < soup.NumEdges(); i++)
+            REQUIRE(soup.GetEdge(soup.GetEdgeIndex(i)).dense_index == i);
+    };
+
+    static constexpr auto AssertCorrectness = [](const T &soup)
+    {
+        CheckDenseIndices(soup);
+
         for (int i = 0; i < soup.NumEdges(); i++)
         {
             CAPTURE(i);
@@ -26,6 +34,11 @@ TEST_CASE("edge_soup.editor")
     };
 
     T c;
+    c.Edit([&]([[maybe_unused]] T::Editor &e)
+    {
+        REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+    });
+
     c.AddClosedLoop({{10,10}, {20,10}, {20,20}, {10, 20}});
     AssertCorrectness(c);
     ASSERT(c.NumEdges() == 4);
@@ -33,6 +46,28 @@ TEST_CASE("edge_soup.editor")
     ASSERT(c.GetEdge(c.GetEdgeIndex(1)).a == ivec2(20,10));
     ASSERT(c.GetEdge(c.GetEdgeIndex(2)).a == ivec2(20,20));
     ASSERT(c.GetEdge(c.GetEdgeIndex(3)).a == ivec2(10,20));
+
+    c.Edit([&](T::Editor &e)
+    {
+        [[maybe_unused]] T::EdgeIndex edge{};
+
+        REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+        e.RemoveEdge(c.GetEdgeIndex(1));
+        CheckDenseIndices(c);
+        REQUIRE((!e.IsComplete() && e.NumDetachedPoints() == 2));
+
+        edge = e.AddEdge({{22,12},{22,18}});
+        REQUIRE(c.GetEdge(edge).dense_index == 3);
+        REQUIRE((!e.IsComplete() && e.NumDetachedPoints() == 4));
+
+        edge = e.AddEdge({{20,10},{22,12}});
+        REQUIRE(c.GetEdge(edge).dense_index == 4);
+        REQUIRE((!e.IsComplete() && e.NumDetachedPoints() == 2));
+
+        edge = e.AddEdge({{22,18},{20,20}});
+        REQUIRE(c.GetEdge(edge).dense_index == 5);
+        REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+    });
 }
 
 // Some basic point collision tests.
