@@ -348,15 +348,17 @@ TEST_CASE("edge_soup.soup_to_soup")
 
     auto Collide = [](const T &shape_a, const T &shape_b, float t, fvec2 pos_a, float angle_a, fvec2 offset_a, float rot_a, fvec2 pos_b, float angle_b, fvec2 offset_b, float rot_b, const std::vector<CollidingPoint> &points)
     {
-        auto HalfCollide = [](bool inv, float t, const T &shape_a, const T &shape_b, fvec2 pos_a, float angle_a, fvec2 offset_a, float rot_a, fvec2 pos_b, float angle_b, fvec2 offset_b, float rot_b, std::vector<CollidingPoint> points)
+        Storage::MonotonicPool persistent_pool;
+        Storage::MonotonicPool temp_pool;
+
+        auto HalfCollide = [&persistent_pool, &temp_pool](bool inv, float t, const T &shape_a, const T &shape_b, fvec2 pos_a, float angle_a, fvec2 offset_a, float rot_a, fvec2 pos_b, float angle_b, fvec2 offset_b, float rot_b, std::vector<CollidingPoint> points)
         {
             CAPTURE(inv);
 
-            std::vector<char> memory;
-            std::size_t memory_pos = 0;
+
             T::EdgeSoupCollider::Params params{
-                .memory_pool = &memory,
-                .memory_pool_offset = &memory_pos,
+                .persistent_pool = &persistent_pool,
+                .temp_pool = temp_pool,
                 .self_pos = pos_a,
                 .other_pos = pos_b,
                 .self_vel = offset_a,

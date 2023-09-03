@@ -10,6 +10,7 @@
 #include "utils/aabb_tree.h"
 #include "utils/alignment.h"
 #include "utils/mat.h"
+#include "utils/monotonic_pool.h"
 
 #define IMP_EDGESOUP_DEBUG(...) // (std::cout << FMT(__VA_ARGS__) << '\n')
 
@@ -506,11 +507,9 @@ class EdgeSoup
         struct Params
         {
             // This is used during construction, and then must be kept alive for all subsequent collision tests.
-            // We use this to store the temporary edge lists. The old value is ignored.
-            // We increase the size of the vector if it's not large enough.
-            std::vector<char> *memory_pool = nullptr;
-            // Current byte offset in `memory_pool`.
-            std::size_t *memory_pool_offset = nullptr;
+            Storage::MonotonicPool *persistent_pool = nullptr;
+            // This is used only during construction, and then cleared.
+            Storage::TemporaryPoolRef temp_pool;
 
             // Positions.
             vector self_pos;
@@ -538,19 +537,6 @@ class EdgeSoup
       private:
         const EdgeSoup *self = nullptr;
         const EdgeSoup *other = nullptr;
-        Params params;
-
-        template <typename U>
-        [[nodiscard]] std::size_t AllocInPool(std::size_t n = 1)
-        {
-            static_assert(std::is_trivially_copyable_v<U> && alignof(U) <= __STDCPP_DEFAULT_NEW_ALIGNMENT__);
-            std::size_t this_offset = Storage::Align<alignof(U)>(*params.memory_pool_offset);
-            *params.memory_pool_offset = this_offset + sizeof(U) * n;
-            if (*params.memory_pool_offset > params.memory_pool->size())
-                params.memory_pool->resize(std::max(*params.memory_pool_offset, params.memory_pool->size() * 2));
-            ::new((void *)(params.memory_pool->data() + this_offset)) U[n];
-            return this_offset;
-        }
 
         struct CollisionCandidate
         {
@@ -562,22 +548,22 @@ class EdgeSoup
         {
             EdgeIndex edge_index;
             Edge edge;
-            std::size_t pool_offset_to_collision_candidates = 0;
-            std::size_t num_collision_candidates = 0;
+            std::span<CollisionCandidate> collision_candidates;
         };
 
         // One entry per those self edges that can participate in the collision.
-        std::size_t pool_offset_to_edge_entries = 0;
-        std::size_t num_edge_entries = 0;
+        std::span<EdgeEntry> edge_entries;
 
       public:
-        EdgeSoupCollider(const EdgeSoup &new_self, const EdgeSoup &new_other, Params new_params)
-            : self(&new_self), other(&new_other), params(std::move(new_params))
+        EdgeSoupCollider(const EdgeSoup &new_self, const EdgeSoup &new_other, const Params &params)
+            : self(&new_self), other(&new_other)
         {
             ASSERT(params.self_angular_vel_abs_upper_bound >= 0);
             ASSERT(params.other_angular_vel_abs_upper_bound >= 0);
 
-            pool_offset_to_edge_entries = AllocInPool<EdgeEntry>(self->NumEdges());
+            edge_entries = params.persistent_pool->template AllocateArray<EdgeEntry>(self->NumEdges());
+            // The rest of `edge_entries` is unused in this function, but we shrink it at the end.
+            std::size_t num_edge_entries = 0;
 
             matrix inv_self_rot = InvertRotationMatrix(params.self_rot);
             matrix inv_other_rot = InvertRotationMatrix(params.other_rot);
@@ -593,7 +579,9 @@ class EdgeSoup
             // Would need `next_value` here, if not for `hitbox_expansion_epsilon`.
             scalar max_distance_to_other = sqrt(max((params.other_pos - params.self_pos).len_sq(), ((params.other_pos + other_delta_vel) - (params.self_pos + params.self_vel)).len_sq()));
 
-            std::vector<EdgeIndex> temp_edges;
+            // Collision candidates are temporarily stored here.
+            auto temp_other_edges = params.temp_pool->template AllocateArray<EdgeIndex>(other->NumEdges());
+            std::size_t num_temp_other_edges = 0;
 
             rect other_aabb_in_self_coords = [&]{
                 rect other_bounds = other->Bounds();
@@ -642,26 +630,26 @@ class EdgeSoup
                     (void)self_edge_index;
                     (void)self_edge;
                     (void)self_transformed_edge;
-                    temp_edges.push_back(other_edge_index);
+                    temp_other_edges[num_temp_other_edges++] = other_edge_index;
                     return false;
                 },
                 [&](EdgeIndex self_edge_index, const EdgeWithData &self_edge, const Edge &self_transformed_edge)
                 {
                     (void)self_transformed_edge;
-                    std::size_t pool_offset_to_candidates = AllocInPool<CollisionCandidate>(temp_edges.size());
-                    EdgeEntry &edge_entry = std::launder(reinterpret_cast<EdgeEntry *>(params.memory_pool->data() + pool_offset_to_edge_entries))[num_edge_entries];
+                    EdgeEntry &edge_entry = edge_entries[num_edge_entries];
                     edge_entry.edge_index = self_edge_index;
                     edge_entry.edge = self_edge;
-                    edge_entry.pool_offset_to_collision_candidates = pool_offset_to_candidates;
-                    edge_entry.num_collision_candidates = temp_edges.size();
-                    CollisionCandidate *candidates_ptr = std::launder(reinterpret_cast<CollisionCandidate *>(params.memory_pool->data() + pool_offset_to_candidates));
-                    for (std::size_t i = 0; i < temp_edges.size(); i++)
-                        candidates_ptr[i] = {.edge_index = temp_edges[i], .edge = other->GetEdge(temp_edges[i])};
+                    edge_entry.collision_candidates = params.persistent_pool->template AllocateArray<CollisionCandidate>(num_temp_other_edges);
+                    for (std::size_t i = 0; i < num_temp_other_edges; i++)
+                        edge_entry.collision_candidates[i] = {.edge_index = temp_other_edges[i], .edge = other->GetEdge(temp_other_edges[i])};
                     num_edge_entries++;
-                    temp_edges.clear();
+                    num_temp_other_edges = 0;
                     return false;
                 }
             );
+
+            // Shrink `edge_entries` to its proper size.
+            edge_entries = {edge_entries.data(), num_edge_entries};
         }
 
         struct CallbackData
@@ -691,10 +679,8 @@ class EdgeSoup
         {
             IMP_EDGESOUP_DEBUG("------------------------------- shape to shape collision in a collider:");
 
-            EdgeEntry *edge_entries_ptr = std::launder(reinterpret_cast<EdgeEntry *>(params.memory_pool->data() + pool_offset_to_edge_entries));
-            for (std::size_t i = 0; i < num_edge_entries; i++)
+            for (const EdgeEntry &entry : edge_entries)
             {
-                const EdgeEntry &entry = edge_entries_ptr[i];
                 IMP_EDGESOUP_DEBUG("edge {}", typename AabbTree::NodeIndex(entry.edge_index));
 
                 Edge world_self_edge = entry.edge;
@@ -702,12 +688,8 @@ class EdgeSoup
                 world_self_edge.b = self_pos + self_rot * world_self_edge.b;
                 IMP_EDGESOUP_DEBUG("{}-{} -> {}-{}", entry.edge.a, entry.edge.b, world_self_edge.a, world_self_edge.b);
 
-                const CollisionCandidate *candidates_ptr = std::launder(reinterpret_cast<const CollisionCandidate *>(params.memory_pool->data() + entry.pool_offset_to_collision_candidates));
-
-                for (std::size_t j = 0; j < entry.num_collision_candidates; j++)
+                for (const CollisionCandidate &candidate : entry.collision_candidates)
                 {
-                    const CollisionCandidate &candidate = candidates_ptr[j];
-
                     IMP_EDGESOUP_DEBUG("  candidate {}", typename AabbTree::NodeIndex(candidate.edge_index));
 
                     Edge world_other_edge = candidate.edge;
@@ -750,8 +732,8 @@ class EdgeSoup
     };
 
     // Used to perform multiple near collision tests on two edge soups.
-    [[nodiscard]] EdgeSoupCollider MakeEdgeSoupCollider(const EdgeSoup &other, EdgeSoupCollider::Params params) const
+    [[nodiscard]] EdgeSoupCollider MakeEdgeSoupCollider(const EdgeSoup &other, const EdgeSoupCollider::Params &params) const
     {
-        return EdgeSoupCollider(*this, other, std::move(params));
+        return EdgeSoupCollider(*this, other, params);
     }
 };

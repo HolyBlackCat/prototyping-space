@@ -204,12 +204,12 @@ struct ContourDemo
                 self_offset = self_vel;
                 other_offset = other_vel;
 
-                std::vector<char> memory;
-                std::size_t memory_pos = 0;
+                Storage::MonotonicPool persistent_pool;
+                Storage::MonotonicPool temp_pool;
 
                 auto collider = shape.MakeEdgeSoupCollider(other_shape, {
-                    .memory_pool = &memory,
-                    .memory_pool_offset = &memory_pos,
+                    .persistent_pool = &persistent_pool,
+                    .temp_pool = &temp_pool,
                     .self_pos = self_pos,
                     .other_pos = other_pos,
                     .self_vel = self_vel,
