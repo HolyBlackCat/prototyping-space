@@ -130,7 +130,7 @@ struct ContourDemo
 
         other_pos = vector(-9, 77);
         // other_matrix = imat2(0,-1,1,0);
-        other_matrix = matrix::rotate(to_rad(10));
+        other_matrix = matrix::rotate(to_rad(120));
 
         // C
         // Refl::FromString(unfinished_contour, "[(-70,-65),(21,-81),(35,6),(-58,21),(-44,-4),(10,-12),(1,-59),(-56,-49)]");
@@ -185,7 +185,8 @@ struct ContourDemo
                 // // Shape collision.
                 // collides = shape.CollideEdgeSoupSimple(other_shape, other_pos, other_matrix);
 
-                // Shape collision with offset.
+                // Moving shape collision.
+                #if 0
                 int num_steps = 8;
                 vector self_vel(-31, 12);
                 vector other_vel(40, 20);
@@ -239,13 +240,46 @@ struct ContourDemo
                         other_matrix_offset = matrix::rotate(other_ang_vel * t);
                     }
                 }
+                #endif
             }
 
-            DrawShape(false, shape, self_pos + self_offset, self_matrix_offset * self_matrix, fvec3(1,1,1), 0.5f);
+            if (self_offset || self_matrix != matrix{})
+                DrawShape(false, shape, self_pos + self_offset, self_matrix_offset * self_matrix, fvec3(1,1,1), 0.5f);
             DrawShape(true, shape, self_pos, self_matrix, collides ? fvec3(1,0,1) : fvec3(1,1,1));
 
-            DrawShape(false, other_shape, other_pos + other_offset, other_matrix_offset * other_matrix, fvec3(0,0.5f,1), 0.5f);
+            if (other_offset || other_matrix != matrix{})
+                DrawShape(false, other_shape, other_pos + other_offset, other_matrix_offset * other_matrix, fvec3(0,0.5f,1), 0.5f);
             DrawShape(true, other_shape, other_pos, other_matrix, fvec3(0,0.5f,1));
+
+            { // Collision information.
+                Storage::MonotonicPool persistent_pool, temp_pool;
+                auto collider = shape.MakeEdgeSoupCollider(other_shape, Shape::EdgeSoupCollider::Params{
+                    .persistent_pool = &persistent_pool,
+                    .temp_pool = temp_pool,
+                    .self_pos = self_pos,
+                    .other_pos = other_pos,
+                    .self_vel = vector{},
+                    .other_vel = vector{},
+                    .self_rot = self_matrix,
+                    .other_rot = other_matrix,
+                    .self_angular_vel_abs_upper_bound = 0,
+                    .other_angular_vel_abs_upper_bound = 0,
+                });
+                Shape::CollisionPointsAccumulator accum(shape, Shape::CollisionPointsAccumulator::Params{
+                    .persistent_pool = &persistent_pool,
+                });
+                collider.Collide(self_pos, self_matrix, other_pos, other_matrix, [&](Shape::EdgeSoupCollider::CallbackData data) -> bool
+                {
+                    accum.AddPoint(data);
+                    return false;
+                });
+
+                for (auto edge_index : accum.GetEdgesWithPoints())
+                for (const auto &point : accum.GetEdgeEntry(edge_index).points)
+                {
+                    r.iquad(iround(self_pos + self_matrix * shape.GetEdge(edge_index).Point(point.self_num, point.den)), ivec2(5)).center().color(point.other_enters_self ? fvec3(0,1,0) : fvec3(1,0,0)).alpha(0.5f);
+                }
+            }
         }
 
         { // Unfinished contour.

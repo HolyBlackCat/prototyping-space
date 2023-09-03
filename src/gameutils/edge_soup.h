@@ -885,6 +885,22 @@ class EdgeSoup
             scalar num_self = 0;
             scalar num_other = 0;
             scalar den = 1;
+
+            // Returns the same data, but with self and other swapped.
+            [[nodiscard]] CallbackData Mirror() const
+            {
+                return {
+                    .self_edge_index  = other_edge_index,
+                    .self_edge        = other_edge,
+                    .world_self_edge  = world_other_edge,
+                    .other_edge_index = self_edge_index,
+                    .other_edge       = self_edge,
+                    .world_other_edge = world_self_edge,
+                    .num_self         = num_other,
+                    .num_other        = num_self,
+                    .den              = den,
+                };
+            }
         };
 
         // If `func` is not specified, returns true on collision.
@@ -954,7 +970,7 @@ class EdgeSoup
         return EdgeSoupCollider(*this, other, params);
     }
 
-    // Accumulates `CallbackData` objects, and produces a collision summary from them.
+    // Accumulates `EdgeSoupCollider::CallbackData` objects, and produces a collision summary from them.
     class CollisionPointsAccumulator
     {
       public:
@@ -973,38 +989,42 @@ class EdgeSoup
 
         struct PointDesc
         {
-            // If true, the other edge enters the self shape.
-            // If false, the other edge exits the self shape.
-            bool in = false;
+            // If true, the other edge enters the self shape, while the self edge exits the other shape.
+            // If false, the other edge exits the self shape, while the self edge enters the other shape.
+            bool other_enters_self = false;
 
             // The relative position of the point on the self edge, as a fraction.
             scalar self_num = 0;
             scalar den = 1;
         };
 
-        struct EdgeDesc
+        struct EdgeEntry
         {
             std::span<PointDesc> points;
             // The number of objects we can store at `points.data()`.
             std::size_t points_capacity = 0;
         };
 
+      private:
         struct State
         {
             const EdgeSoup *self = nullptr;
             Params params;
 
-            // This is sparse, use `EdgeIndex` as indices.
-            std::span<EdgeDesc> edge_entries;
+            // This is sparse, use self `EdgeIndex` as indices.
+            std::span<EdgeEntry> edge_entries;
+            // This lists all edges with at least one point.
+            std::span<EdgeIndex> edges_with_points;
         };
         State state;
 
       public:
         CollisionPointsAccumulator(const EdgeSoup &self, Params params)
         {
-            state.self = self;
+            state.self = &self;
             state.params = std::move(params);
-            state.edge_entries = state.params.persistent_pool->template AllocateArray<EdgeDesc>(state.self->NumSparseEdges());
+            state.edge_entries = state.params.persistent_pool->template AllocateArray<EdgeEntry>(state.self->NumSparseEdges());
+            state.edges_with_points = {state.params.persistent_pool->template AllocateArray<EdgeIndex>(state.self->NumEdges()).data(), 0};
         }
 
         CollisionPointsAccumulator(CollisionPointsAccumulator &&other) noexcept : state(std::exchange(other.state, {})) {}
@@ -1014,6 +1034,53 @@ class EdgeSoup
             return *this;
         }
 
-        #error continue (hovering cat.jpt)
+        // Returns all edges that have at least one point, out of order.
+        [[nodiscard]] std::span<const EdgeIndex> GetEdgesWithPoints() const
+        {
+            return state.edges_with_points;
+        }
+
+        // Returns the information about the specified edge.
+        [[nodiscard]] const EdgeEntry &GetEdgeEntry(EdgeIndex index) const
+        {
+            return state.edge_entries[typename AabbTree::NodeIndex(index)];
+        }
+
+        // Note, the collider must use the same object as 'self' as was passed to the constructor.
+        void AddPoint(const EdgeSoupCollider::CallbackData &data)
+        {
+            EdgeEntry &edge_entry = state.edge_entries[typename AabbTree::NodeIndex(data.self_edge_index)];
+
+            // Check that we have enough capacity in the point list.
+            ASSERT(edge_entry.points.size() <= edge_entry.points_capacity);
+            if (edge_entry.points.size() == edge_entry.points_capacity)
+            {
+                // Out of capacity.
+                if (edge_entry.points_capacity == 0)
+                {
+                    edge_entry.points_capacity = state.params.edge_points_capacity_initial;
+                    // If this is the first time we see this edge, add it to the list.
+                    // This shouldn't overflow.
+                    state.edges_with_points.data()[state.edges_with_points.size()] = data.self_edge_index;
+                    state.edges_with_points = {state.edges_with_points.data(), state.edges_with_points.size() + 1};
+                }
+                else
+                {
+                    edge_entry.points_capacity *= state.params.edge_points_capacity_factor;
+                }
+
+                PointDesc *new_points = state.params.persistent_pool->template AllocateArray<PointDesc>(edge_entry.points_capacity).data();
+                std::move(edge_entry.points.begin(), edge_entry.points.end(), new_points);
+                edge_entry.points = {new_points, edge_entry.points.size()/*sic*/};
+            }
+            ASSERT(edge_entry.points.size() < edge_entry.points_capacity);
+
+            PointDesc &new_point = edge_entry.points.data()[edge_entry.points.size()];
+            edge_entry.points = {edge_entry.points.data(), edge_entry.points.size() + 1};
+
+            new_point.self_num = data.num_self;
+            new_point.den = data.den;
+            new_point.other_enters_self = (data.world_self_edge.b - data.world_self_edge.a) /cross/ (data.world_other_edge.b - data.world_other_edge.a) > 0;
+        }
     };
 };
