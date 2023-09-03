@@ -93,18 +93,58 @@ TEST_CASE("edge_soup.editor")
         e.AddPath({{20,20}, {12,18}, {10,10}});
         CheckDenseIndices(c);
         REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+        AssertCorrectness(c);
 
         e.RemoveEdge(c.GetEdgeIndex(4));
         CheckDenseIndices(c);
         REQUIRE((!e.IsComplete() && e.NumDetachedPoints() == 2));
         e.RemoveEdge(c.GetEdgeIndex(4));
-        REQUIRE((!e.IsComplete() && e.NumDetachedPoints() == 2));
         CheckDenseIndices(c);
+        REQUIRE((!e.IsComplete() && e.NumDetachedPoints() == 2));
 
         e.AddPath({{20,20}, {10,10}});
         CheckDenseIndices(c);
         REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
     });
+    AssertCorrectness(c);
+
+    // Special cases.
+    c.Edit([&](T::Editor &e)
+    {
+        REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+        REQUIRE(c.NumEdges() == 5);
+
+        e.AddPath({});
+        REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+        REQUIRE(c.NumEdges() == 5);
+        AssertCorrectness(c);
+
+        e.AddPath({{1,2}});
+        REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+        REQUIRE(c.NumEdges() == 5);
+        AssertCorrectness(c);
+
+        e.AddClosedLoop({});
+        REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+        REQUIRE(c.NumEdges() == 5);
+        AssertCorrectness(c);
+
+        e.AddClosedLoop({{3,4}});
+        REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+        REQUIRE(c.NumEdges() == 5);
+        AssertCorrectness(c);
+
+        e.AddClosedLoop({{3,4},{5,6}});
+        REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+        REQUIRE(c.NumEdges() == 7);
+        AssertCorrectness(c);
+        REQUIRE(c.GetEdge(c.GetEdgeIndex(5)).a == ivec2(3,4));
+        REQUIRE(c.GetEdge(c.GetEdgeIndex(5)).b == ivec2(5,6));
+        REQUIRE(c.GetEdge(c.GetEdgeIndex(6)).a == ivec2(5,6));
+        REQUIRE(c.GetEdge(c.GetEdgeIndex(6)).b == ivec2(3,4));
+    });
+
+    AssertCorrectness(c);
 }
 
 // Some basic point collision tests.
