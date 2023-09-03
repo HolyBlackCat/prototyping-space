@@ -43,7 +43,7 @@ struct ContourDemo
     std::vector<vector> unfinished_contour;
 
     Shape other_shape;
-    vector other_pos;
+    vector other_pos = vector(-154, 2);
     matrix other_matrix;
 
     void DrawLine(fvec2 a, fvec2 b, fvec3 color, float alpha = 1) const
@@ -117,17 +117,22 @@ struct ContourDemo
     {
         // C
         // Refl::FromString(unfinished_contour, "[(-70,-65),(21,-81),(35,6),(-58,21),(-44,-4),(10,-12),(1,-59),(-56,-49)]");
+        // flipped C
+        // Refl::FromString(unfinished_contour, "[(56,-49),(-1,-59),(-10,-12),(44,-4),(58,21),(-35,6),(-21,-81),(70,-65)]");
         // O
         // Refl::FromString(unfinished_contour, "[(-60,-50),(-11,-68),(41,-48),(58,6),(37,51),(-15,67),(-63,49),(-85,0)]");
         // overhangs
         // Refl::FromString(unfinished_contour, "[(-26,-121),(12,-46),(-9,-40),(10,-6),(-11,-6),(9,28),(-8,23),(7,56),(-6,56),(-17,31),(-34,119),(-100,128),(-102,-128)]");
         // hook
         // Refl::FromString(unfinished_contour, "[(-67,31),(-67,14),(-34,25),(-8,10),(-8,-37),(-17,-49),(1,-38),(10,20),(-27,48)]");
+        // rod
+        // Refl::FromString(unfinished_contour, "[(-3,22),(-24,29),(-33,10),(-14,-124),(-5,-118)]");
 
-        Refl::FromString(unfinished_contour, "[(56,-49),(-1,-59),(-10,-12),(44,-4),(58,21),(-35,6),(-21,-81),(70,-65)]"); // flipped C
+        // flipped C
+        Refl::FromString(unfinished_contour, "[(56,-49),(-1,-59),(-10,-12),(44,-4),(58,21),(-35,6),(-21,-81),(70,-65)]");
         AddUnfinishedContourToShape();
 
-        Refl::FromString(unfinished_contour, "[(-67,31),(-67,14),(-34,25),(-8,10),(-8,-37),(-17,-49),(1,-38),(10,20),(-27,48)]"); // hook
+        Refl::FromString(unfinished_contour, "[(-3,22),(-24,29),(-5,-118)]"); // rod
         AddUnfinishedContourToShape(&other_shape);
     }
 
@@ -152,6 +157,7 @@ struct ContourDemo
         { // The shape.
             bool collides = false;
             vector other_offset;
+            matrix other_matrix_offset;
             if (unfinished_contour.empty())
             {
                 // // Point collision.
@@ -165,6 +171,10 @@ struct ContourDemo
                 // Shape collision with offset.
                 int num_steps = 8;
                 vector other_vel(40, 20);
+                float other_ang_vel = f_pi / 2;
+                other_matrix_offset = matrix::rotate(other_ang_vel);
+
+                other_offset = other_vel;
 
                 std::vector<char> memory;
                 std::size_t memory_pos = 0;
@@ -179,27 +189,36 @@ struct ContourDemo
                     .self_rot = matrix{},
                     .other_rot = other_matrix,
                     .self_angular_vel_abs_upper_bound = 0,
-                    .other_angular_vel_abs_upper_bound = 0,
+                    .other_angular_vel_abs_upper_bound = abs(other_ang_vel),
                 });
 
                 // collides = collider.Collide(vector{}, matrix{}, other_pos, other_matrix);
 
-                float t = 0.5f;
-                other_offset = other_vel * 0.5f;
-                for (int i = 0; i < num_steps; i++)
+                if (!collider.Collide(vector{}, matrix{}, other_pos + other_vel, other_matrix_offset * other_matrix))
                 {
-                    bool hit = collider.Collide(vector{}, matrix{}, other_pos + other_offset, other_matrix);
-                    if (hit)
-                        collides = true;
-
-                    t += (hit ? -1 : 1) * (1.f / (1 << (i + 2)));
+                    collides = false;
+                }
+                else
+                {
+                    float t = 0.5f;
                     other_offset = other_vel * t;
+                    other_matrix_offset = matrix::rotate(other_ang_vel * t);
+                    for (int i = 0; i < num_steps; i++)
+                    {
+                        bool hit = collider.Collide(vector{}, matrix{}, other_pos + other_offset, other_matrix_offset * other_matrix);
+                        if (hit)
+                            collides = true;
+
+                        t += (hit ? -1 : 1) * (1.f / (1 << (i + 2)));
+                        other_offset = other_vel * t;
+                        other_matrix_offset = matrix::rotate(other_ang_vel * t);
+                    }
                 }
             }
 
             DrawShape(true, shape, vector{}, matrix{}, collides ? fvec3(1,0,1) : fvec3(1,1,1));
 
-            DrawShape(false, other_shape, other_pos + other_offset, other_matrix, fvec3(0.2f, 0.2f, 0.2f));
+            DrawShape(false, other_shape, other_pos + other_offset, other_matrix_offset * other_matrix, fvec3(0.2f, 0.2f, 0.2f));
             DrawShape(true, other_shape, other_pos, other_matrix, fvec3(0,0.5f,1));
         }
 

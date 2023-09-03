@@ -570,7 +570,10 @@ class EdgeSoup
             auto map_other_point_to_self = [&](vector point){return self_to_other_rot * (point - params.self_pos) + params.other_pos;};
             auto map_self_point_to_other = [&](vector point){return other_to_self_rot * (point - params.other_pos) + params.self_pos;};
 
+            // Other velocity relative to self, in world coordinates.
             vector other_delta_vel = params.other_vel - params.self_vel;
+            // Same, but in other coordinates.
+            vector other_delta_vel_in_other = inv_other_rot * other_delta_vel;
 
             // Would need `next_value` here, if not for `hitbox_expansion_epsilon`.
             scalar max_distance_to_other = sqrt(max((params.other_pos - params.self_pos).len_sq(), ((params.other_pos + other_delta_vel) - (params.self_pos + params.self_vel)).len_sq()));
@@ -579,12 +582,13 @@ class EdgeSoup
 
             rect other_aabb_in_self_coords = [&]{
                 rect other_bounds = other->Bounds();
-                // Expand by the relative velocity.
-                other_bounds = other_bounds.expand_dir(inv_other_rot * other_delta_vel);
                 // Compute the outer radius of the other hitbox.
                 scalar other_outer_radius = other->EnclosingRadius();
                 // Expand according to other angular velocity, but not larger than a box enclosing the enclosing circle.
+                // NOTE: This must be the first operation on the box, because we clamp the resulting box.
                 other_bounds = vector().centered_rect_halfsize(other_outer_radius).intersect(other_bounds.expand(other_outer_radius * params.other_angular_vel_abs_upper_bound));
+                // Expand by the relative velocity.
+                other_bounds = other_bounds.expand_dir(other_delta_vel_in_other);
                 // Expand according to self angular velocity.
                 other_bounds = other_bounds.expand((other_outer_radius + max_distance_to_other) * params.self_angular_vel_abs_upper_bound);
 
