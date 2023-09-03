@@ -381,27 +381,36 @@ TEST_CASE("edge_soup.soup_to_soup")
                     (void)other_edge_index;
                     (void)other_edge;
                     (void)world_other_edge;
+                    (void)num_other;
 
                     REQUIRE_MESSAGE(!points.empty(), "More collisions than expected.");
-
-                    if (inv)
-                        std::swap(num_self, num_other);
 
                     fvec2 point = world_self_edge.Point(num_self, den);
                     REQUIRE(PointsNear(point, world_other_edge.Point(num_other, den)));
                     REQUIRE(PointsNear(point, col_mat_a * self_edge.Point(num_self, den) + col_pos_a));
                     REQUIRE(PointsNear(point, col_mat_b * other_edge.Point(num_other, den) + col_pos_b));
 
+                    [[maybe_unused]] bool has_near_points = false;
                     auto it = std::find_if(points.begin(), points.end(), [&](const CollidingPoint &p)
                     {
-                        return PointsNear(p.pos, point);
-                    });
-                    REQUIRE(it != points.end());
+                        if (PointsNear(p.pos, point))
+                            has_near_points = true;
+                        else
+                            return false;
 
-                    if (it->self_edge)
-                        REQUIRE(shape_a.GetEdge(self_edge_index).dense_index == *it->self_edge);
-                    if (it->other_edge)
-                        REQUIRE(shape_a.GetEdge(other_edge_index).dense_index == *it->other_edge);
+                        std::optional<int> expected_self_edge = p.self_edge;
+                        std::optional<int> expected_other_edge = p.other_edge;
+                        if (inv)
+                            std::swap(expected_self_edge, expected_other_edge);
+
+                        if (expected_self_edge && shape_a.GetEdge(self_edge_index).dense_index != *expected_self_edge)
+                            return false;
+                        if (expected_other_edge && shape_b.GetEdge(other_edge_index).dense_index != *expected_other_edge)
+                            return false;
+                        return true;
+                    });
+                    REQUIRE_MESSAGE(has_near_points, "Unexpected collision point position.");
+                    REQUIRE_MESSAGE(it != points.end(), "Unexpected collision point metadata.");
 
                     points.erase(it);
                     return false;
@@ -414,15 +423,66 @@ TEST_CASE("edge_soup.soup_to_soup")
         HalfCollide(true, t, shape_b, shape_a, pos_b, angle_b, offset_b, rot_b, pos_a, angle_a, offset_a, rot_a, points);
     };
 
-    T shape_a;
-    shape_a.AddLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
+    // Static objects:
 
-    T shape_b;
-    shape_b.AddLoop({fvec2(3,0),fvec2(0,3),fvec2(-3,0),fvec2(0,-3)});
+    { // Simple collision.
+        T shape_a;
+        shape_a.AddLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
 
-    Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(), 0, fvec2(), 0, {});
-    Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(-5,0), 0, fvec2(), 0, {
-        {.pos = fvec2(-4,-2), .self_edge = 1, .other_edge = 3},
-        {.pos = fvec2(-4, 2), .self_edge = 1, .other_edge = 0},
-    });
+        T shape_b;
+        shape_b.AddLoop({fvec2(3,0),fvec2(0,3),fvec2(0,-3)});
+
+        // No collision, we're fully inside.
+        Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(), 0, fvec2(), 0, {});
+        // No collision, we're outside.
+        Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(-8,0), 0, fvec2(), 0, {});
+        // Penetrating collision.
+        Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(-5,0), 0, fvec2(), 0, {
+            {.pos = fvec2(-4,-2), .self_edge = 1, .other_edge = 2},
+            {.pos = fvec2(-4, 2), .self_edge = 1, .other_edge = 0},
+        });
+        // Touching collision.
+        Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(-7,0), 0, fvec2(), 0, {
+            {.pos = fvec2(-4, 0), .self_edge = 1, .other_edge = 2},
+            {.pos = fvec2(-4, 0), .self_edge = 1, .other_edge = 0},
+        });
+        // Touching corner collision.
+        Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(-7,4), 0, fvec2(), 0, {
+            {.pos = fvec2(-4, 4), .self_edge = 1, .other_edge = 2},
+            {.pos = fvec2(-4, 4), .self_edge = 1, .other_edge = 0},
+            {.pos = fvec2(-4, 4), .self_edge = 0, .other_edge = 2},
+            {.pos = fvec2(-4, 4), .self_edge = 0, .other_edge = 0},
+        });
+    }
+
+    { // Box to box with parallel lines.
+        T shape_a;
+        shape_a.AddLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
+        T shape_b;
+        shape_b.AddLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
+
+        // Exact match, the corners collide.
+        Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(), 0, fvec2(), 0, {
+            {.pos = fvec2( 4, 4), .self_edge = 3, .other_edge = 0},
+            {.pos = fvec2( 4, 4), .self_edge = 0, .other_edge = 3},
+            {.pos = fvec2(-4, 4), .self_edge = 0, .other_edge = 1},
+            {.pos = fvec2(-4, 4), .self_edge = 1, .other_edge = 0},
+            {.pos = fvec2(-4,-4), .self_edge = 1, .other_edge = 2},
+            {.pos = fvec2(-4,-4), .self_edge = 2, .other_edge = 1},
+            {.pos = fvec2( 4,-4), .self_edge = 2, .other_edge = 3},
+            {.pos = fvec2( 4,-4), .self_edge = 3, .other_edge = 2},
+        });
+        // Single axis offset. The corners of the overlapping area collide.
+        Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(-4,0), 0, fvec2(), 0, {
+            {.pos = fvec2( 0, 4), .self_edge = 0, .other_edge = 3},
+            {.pos = fvec2( 0,-4), .self_edge = 2, .other_edge = 3},
+            {.pos = fvec2(-4, 4), .self_edge = 1, .other_edge = 0},
+            {.pos = fvec2(-4,-4), .self_edge = 1, .other_edge = 2},
+        });
+        // Two axis offset. Two collision points.
+        Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(4,4), 0, fvec2(), 0, {
+            {.pos = fvec2( 4, 4), .self_edge = 3, .other_edge = 0},
+            {.pos = fvec2( 4, 4), .self_edge = 0, .other_edge = 3},
+        });
+    }
 }

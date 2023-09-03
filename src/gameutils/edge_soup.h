@@ -78,7 +78,10 @@ class EdgeSoup
             scalar v = delta_a /cross/ delta_self;
             bool ret = abs(u) <= abs_d && abs(v) <= abs_d && u * d >= 0 && v * d >= 0;
             if constexpr (!std::is_null_pointer_v<F>)
-                std::forward<F>(func)(u, v, d);
+            {
+                if (ret)
+                    std::forward<F>(func)(u, v, d);
+            }
             return ret;
         }
     };
