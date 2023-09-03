@@ -179,6 +179,13 @@ class EdgeSoup
         return dense_edge_indices.ElemCount();
     }
 
+    // `EdgeIndex` values are less than this number. Use for sparse arrays indexed by edge indices.
+    // This probably should be `<= NumEdges() * 2`, but this is an implementation detail.
+    [[nodiscard]] int NumSparseEdges() const
+    {
+        return aabb_tree.Nodes().ElemCount();
+    }
+
     // Returns the shape bounds. Those may or may not be slightly larger than the actual shape.
     // Returns a default-constructed rect if the shape is empty.
     [[nodiscard]] rect Bounds() const
@@ -946,4 +953,67 @@ class EdgeSoup
     {
         return EdgeSoupCollider(*this, other, params);
     }
+
+    // Accumulates `CallbackData` objects, and produces a collision summary from them.
+    class CollisionPointsAccumulator
+    {
+      public:
+        struct Params
+        {
+            // This needs to stay alive as long as the object is used.
+            Storage::MonotonicPool *persistent_pool = nullptr;
+
+            // The starting capacity of point lists in edges.
+            // This is used when the first point is inserted, before that the capacity is zero.
+            std::size_t edge_points_capacity_initial = 4;
+            // When a point list of an edge runs out of capacity (and it's already positive),
+            // the capacity is multiplied by this number.
+            std::size_t edge_points_capacity_factor = 2;
+        };
+
+        struct PointDesc
+        {
+            // If true, the other edge enters the self shape.
+            // If false, the other edge exits the self shape.
+            bool in = false;
+
+            // The relative position of the point on the self edge, as a fraction.
+            scalar self_num = 0;
+            scalar den = 1;
+        };
+
+        struct EdgeDesc
+        {
+            std::span<PointDesc> points;
+            // The number of objects we can store at `points.data()`.
+            std::size_t points_capacity = 0;
+        };
+
+        struct State
+        {
+            const EdgeSoup *self = nullptr;
+            Params params;
+
+            // This is sparse, use `EdgeIndex` as indices.
+            std::span<EdgeDesc> edge_entries;
+        };
+        State state;
+
+      public:
+        CollisionPointsAccumulator(const EdgeSoup &self, Params params)
+        {
+            state.self = self;
+            state.params = std::move(params);
+            state.edge_entries = state.params.persistent_pool->template AllocateArray<EdgeDesc>(state.self->NumSparseEdges());
+        }
+
+        CollisionPointsAccumulator(CollisionPointsAccumulator &&other) noexcept : state(std::exchange(other.state, {})) {}
+        CollisionPointsAccumulator &operator=(CollisionPointsAccumulator other) noexcept
+        {
+            std::swap(state, other.state);
+            return *this;
+        }
+
+        #error continue (hovering cat.jpt)
+    };
 };
