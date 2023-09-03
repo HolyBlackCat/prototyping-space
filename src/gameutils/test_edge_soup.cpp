@@ -293,38 +293,136 @@ TEST_CASE("edge_soup.edge_to_edge")
 {
     using T = EdgeSoup<int>;
 
-    auto sameInAllModes = [](T::Edge e1, T::Edge e2) -> bool
+    auto SameInAllModes = [](T::Edge e1, T::Edge e2) -> bool
     {
-        [[maybe_unused]] bool r1 = e1.CollideWithEdgeInclusive(e2, T::Edge::EdgeCollisionMode::parallelRejected);
-        [[maybe_unused]] bool r2 = e1.CollideWithEdgeInclusive(e2, T::Edge::EdgeCollisionMode::parallelUnspecified);
+        [[maybe_unused]] bool r1 = e1.CollideWithEdgeInclusive(e2, T::Edge::EdgeCollisionMode::parallel_rejected);
+        [[maybe_unused]] bool r2 = e1.CollideWithEdgeInclusive(e2, T::Edge::EdgeCollisionMode::parallel_unspecified);
         REQUIRE_EQ(r1, r2);
         return r1;
     };
 
     // True intersection.
-    REQUIRE(sameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,19), ivec2(10,21)}));
+    REQUIRE(SameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,19), ivec2(10,21)}));
 
     // Point 1 touches.
-    REQUIRE(sameInAllModes({ivec2(10, 20), ivec2(12,20)}, {ivec2(10,19), ivec2(10,21)}));
-    REQUIRE_FALSE(sameInAllModes({ivec2(11, 20), ivec2(12,20)}, {ivec2(10,19), ivec2(10,21)}));
+    REQUIRE(SameInAllModes({ivec2(10, 20), ivec2(12,20)}, {ivec2(10,19), ivec2(10,21)}));
+    REQUIRE_FALSE(SameInAllModes({ivec2(11, 20), ivec2(12,20)}, {ivec2(10,19), ivec2(10,21)}));
     // Point 2 touches.
-    REQUIRE(sameInAllModes({ivec2(8, 20), ivec2(10,20)}, {ivec2(10,19), ivec2(10,21)}));
-    REQUIRE_FALSE(sameInAllModes({ivec2(8, 20), ivec2(9,20)}, {ivec2(10,19), ivec2(10,21)}));
+    REQUIRE(SameInAllModes({ivec2(8, 20), ivec2(10,20)}, {ivec2(10,19), ivec2(10,21)}));
+    REQUIRE_FALSE(SameInAllModes({ivec2(8, 20), ivec2(9,20)}, {ivec2(10,19), ivec2(10,21)}));
     // Point 3 touches.
-    REQUIRE(sameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,18), ivec2(10,20)}));
-    REQUIRE_FALSE(sameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,18), ivec2(10,19)}));
+    REQUIRE(SameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,18), ivec2(10,20)}));
+    REQUIRE_FALSE(SameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,18), ivec2(10,19)}));
     // Point 4 touches.
-    REQUIRE(sameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,20), ivec2(10,22)}));
-    REQUIRE_FALSE(sameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,21), ivec2(10,22)}));
+    REQUIRE(SameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,20), ivec2(10,22)}));
+    REQUIRE_FALSE(SameInAllModes({ivec2(9, 20), ivec2(11,20)}, {ivec2(10,21), ivec2(10,22)}));
 
     // Parallel overlap.
-    REQUIRE(T::Edge{ivec2(10, 20), ivec2(14,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(16,20)}, T::Edge::EdgeCollisionMode::parallelUnspecified));
+    REQUIRE(T::Edge{ivec2(10, 20), ivec2(14,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(16,20)}, T::Edge::EdgeCollisionMode::parallel_unspecified));
     // Parallel overlap rejected.
-    REQUIRE_FALSE(T::Edge{ivec2(10, 20), ivec2(14,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(16,20)}, T::Edge::EdgeCollisionMode::parallelRejected));
+    REQUIRE_FALSE(T::Edge{ivec2(10, 20), ivec2(14,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(16,20)}, T::Edge::EdgeCollisionMode::parallel_rejected));
     // Parallel side by side.
-    REQUIRE_FALSE(sameInAllModes({ivec2(10, 20), ivec2(11,20)}, {ivec2(10,21), ivec2(11,21)}));
+    REQUIRE_FALSE(SameInAllModes({ivec2(10, 20), ivec2(11,20)}, {ivec2(10,21), ivec2(11,21)}));
     // Parallel, same line but no overlap.
-    REQUIRE_FALSE(T::Edge{ivec2(10, 20), ivec2(11,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(13,20)}, T::Edge::EdgeCollisionMode::parallelRejected));
-    REQUIRE_FALSE(T::Edge{ivec2(11, 20), ivec2(10,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(13,20)}, T::Edge::EdgeCollisionMode::parallelRejected));
-    REQUIRE_FALSE(T::Edge{ivec2(11, 20), ivec2(10,20)}.CollideWithEdgeInclusive({ivec2(13,20), ivec2(12,20)}, T::Edge::EdgeCollisionMode::parallelRejected));
+    REQUIRE_FALSE(T::Edge{ivec2(10, 20), ivec2(11,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(13,20)}, T::Edge::EdgeCollisionMode::parallel_rejected));
+    REQUIRE_FALSE(T::Edge{ivec2(11, 20), ivec2(10,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(13,20)}, T::Edge::EdgeCollisionMode::parallel_rejected));
+    REQUIRE_FALSE(T::Edge{ivec2(11, 20), ivec2(10,20)}.CollideWithEdgeInclusive({ivec2(13,20), ivec2(12,20)}, T::Edge::EdgeCollisionMode::parallel_rejected));
+}
+
+// Collisions between edge soups.
+TEST_CASE("edge_soup.soup_to_soup")
+{
+    using T = EdgeSoup<float>;
+
+    static constexpr auto PointsNear = [](fvec2 a, fvec2 b) -> bool
+    {
+        return (a - b).len_sq() < 0.0001f;
+    };
+
+    struct CollidingPoint
+    {
+        fvec2 pos;
+        std::optional<int> self_edge;
+        std::optional<int> other_edge;
+    };
+
+    auto Collide = [](const T &shape_a, const T &shape_b, float t, fvec2 pos_a, float angle_a, fvec2 offset_a, float rot_a, fvec2 pos_b, float angle_b, fvec2 offset_b, float rot_b, const std::vector<CollidingPoint> &points)
+    {
+        auto HalfCollide = [](bool inv, float t, const T &shape_a, const T &shape_b, fvec2 pos_a, float angle_a, fvec2 offset_a, float rot_a, fvec2 pos_b, float angle_b, fvec2 offset_b, float rot_b, std::vector<CollidingPoint> points)
+        {
+            std::vector<char> memory;
+            std::size_t memory_pos = 0;
+            T::EdgeSoupCollider::Params params{
+                .memory_pool = &memory,
+                .memory_pool_offset = &memory_pos,
+                .self_pos = pos_a,
+                .other_pos = pos_b,
+                .self_vel = offset_a,
+                .other_vel = offset_b,
+                .self_rot = fmat2::rotate(angle_a),
+                .other_rot = fmat2::rotate(angle_b),
+                .self_angular_vel_abs_upper_bound = abs(rot_a),
+                .other_angular_vel_abs_upper_bound = abs(rot_b),
+            };
+            auto collider = shape_a.MakeEdgeSoupCollider(shape_b, params);
+            fvec2 col_pos_a = pos_a + offset_a * t;
+            fvec2 col_pos_b = pos_b + offset_b * t;
+            fmat2 col_mat_a = fmat2::rotate(angle_a + rot_a * t);
+            fmat2 col_mat_b = fmat2::rotate(angle_b + rot_b * t);
+            collider.Collide(col_pos_a, col_mat_a, col_pos_b, col_mat_b,
+                [&](
+                    T::EdgeIndex self_edge_index, const T::Edge &self_edge, const T::Edge &world_self_edge,
+                    T::EdgeIndex other_edge_index, const T::Edge &other_edge, const T::Edge &world_other_edge,
+                    T::scalar num_self, T::scalar num_other, T::scalar den
+                ) -> bool
+                {
+                    (void)self_edge_index;
+                    (void)self_edge;
+                    (void)other_edge_index;
+                    (void)other_edge;
+                    (void)world_other_edge;
+
+                    REQUIRE_MESSAGE(!points.empty(), "More collisions than expected.");
+
+                    if (inv)
+                        std::swap(num_self, num_other);
+
+                    fvec2 point = world_self_edge.Point(num_self, den);
+                    REQUIRE(PointsNear(point, world_other_edge.Point(num_other, den)));
+                    REQUIRE(PointsNear(point, col_mat_a * self_edge.Point(num_self, den) + col_pos_a));
+                    REQUIRE(PointsNear(point, col_mat_b * other_edge.Point(num_other, den) + col_pos_b));
+
+                    auto it = std::find_if(points.begin(), points.end(), [&](const CollidingPoint &p)
+                    {
+                        return PointsNear(p.pos, point);
+                    });
+                    REQUIRE(it != points.end());
+
+                    if (it->self_edge)
+                        REQUIRE(shape_a.GetEdge(self_edge_index).dense_index == *it->self_edge);
+                    if (it->other_edge)
+                        REQUIRE(shape_a.GetEdge(other_edge_index).dense_index == *it->other_edge);
+
+                    points.erase(it);
+                    return false;
+                }
+            );
+            REQUIRE_MESSAGE(points.empty(), "Less collisions than expected.");
+        };
+
+        HalfCollide(false, t, shape_a, shape_b, pos_a, angle_a, offset_a, rot_a, pos_b, angle_b, offset_b, rot_b, points);
+        HalfCollide(true, t, shape_b, shape_a, pos_b, angle_b, offset_b, rot_b, pos_a, angle_a, offset_a, rot_a, points);
+    };
+
+    T shape_a;
+    shape_a.AddLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
+
+    T shape_b;
+    shape_b.AddLoop({fvec2(3,0),fvec2(0,3),fvec2(-3,0),fvec2(0,-3)});
+
+    Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(), 0, fvec2(), 0, {});
+    Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(-5,0), 0, fvec2(), 0, {
+        {.pos = fvec2(-4,-2), .self_edge = 1, .other_edge = 3},
+        {.pos = fvec2(-4, 2), .self_edge = 1, .other_edge = 0},
+    });
 }
