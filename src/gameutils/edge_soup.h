@@ -159,10 +159,15 @@ class EdgeSoup
     // This is not exactly intuitive.
     SparseSet<int> dense_edge_indices;
 
+    [[nodiscard]] static std::underlying_type_t<EdgeIndex> EdgeIndexToUnderlying(EdgeIndex edge_index)
+    {
+        return std::underlying_type_t<EdgeIndex>(edge_index);
+    }
+
     // Returns a mutable reference to the edge by index.
     [[nodiscard]] EdgeWithData &GetEdgeMutable(EdgeIndex edge_index)
     {
-        return aabb_tree.GetNodeUserData(typename AabbTree::NodeIndex(edge_index));
+        return aabb_tree.GetNodeUserData(EdgeIndexToUnderlying(edge_index));
     }
 
   public:
@@ -196,7 +201,7 @@ class EdgeSoup
     // Returns the edge by index.
     [[nodiscard]] const EdgeWithData &GetEdge(EdgeIndex edge_index) const
     {
-        return aabb_tree.GetNodeUserData(typename AabbTree::NodeIndex(edge_index));
+        return aabb_tree.GetNodeUserData(EdgeIndexToUnderlying(edge_index));
     }
 
     // Returns `EdgeIndex` (which are not consecutive) from a consecutive index (which are `0 <= ... < NumEdges()`).
@@ -248,7 +253,7 @@ class EdgeSoup
         void RemoveEdgeLow(EdgeIndex edge_index)
         {
             int dense_index = target->GetEdge(edge_index).dense_index;
-            [[maybe_unused]] bool ok = target->dense_edge_indices.EraseUnordered(typename AabbTree::NodeIndex(edge_index)); // Sic.
+            [[maybe_unused]] bool ok = target->dense_edge_indices.EraseUnordered(EdgeIndexToUnderlying(edge_index)); // Sic.
             ASSERT(ok);
 
             // Deleting the edge means we need to reassign its dense index to a different edge.
@@ -256,7 +261,7 @@ class EdgeSoup
             if (dense_index < target->NumEdges())
                 target->GetEdgeMutable(target->GetEdgeIndex(dense_index)).dense_index = dense_index;
 
-            ok = target->aabb_tree.RemoveNode(typename AabbTree::NodeIndex(edge_index));
+            ok = target->aabb_tree.RemoveNode(EdgeIndexToUnderlying(edge_index));
             ASSERT(ok);
         }
 
@@ -501,7 +506,7 @@ class EdgeSoup
                 ray_aabb.b[ray_vertical] = bounds.b[ray_vertical];
 
             int counter = 0;
-            target->aabb_tree.CollideAabb(ray_aabb, [&](typename AabbTree::NodeIndex edge_index_raw) -> bool
+            target->aabb_tree.CollideAabb(ray_aabb, [&](EdgeIndexToUnderlying edge_index_raw) -> bool
             {
                 const Edge &edge = target->GetEdge(EdgeIndex(edge_index_raw));
 
@@ -644,7 +649,7 @@ class EdgeSoup
             }
         }
 
-        return aabb_tree.CollideAabb(other_bounds, [&](typename AabbTree::NodeIndex edge_index_raw)
+        return aabb_tree.CollideAabb(other_bounds, [&](EdgeIndexToUnderlying edge_index_raw)
         {
             const EdgeIndex edge_index = EdgeIndex(edge_index_raw);
             const EdgeWithData &original_edge = GetEdge(edge_index);
@@ -663,7 +668,7 @@ class EdgeSoup
 
             bool first = true;
 
-            bool stop = other.EdgeTree().CollideAabb(edge_bounds, [&](typename AabbTree::NodeIndex other_edge_index)
+            bool stop = other.EdgeTree().CollideAabb(edge_bounds, [&](EdgeIndexToUnderlying other_edge_index)
             {
                 if (first)
                 {
@@ -710,7 +715,7 @@ class EdgeSoup
                 (void)self_edge_index;
                 (void)self_edge;
                 bool collides = self_transformed_edge.CollideWithEdgeInclusive(other.GetEdge(other_edge_index), Edge::EdgeCollisionMode::parallel_rejected);
-                IMP_EDGESOUP_DEBUG("{} to {} -> {}", typename AabbTree::NodeIndex(self_edge_index), typename AabbTree::NodeIndex(other_edge_index), collides);
+                IMP_EDGESOUP_DEBUG("{} to {} -> {}", EdgeIndexToUnderlying(self_edge_index), EdgeIndexToUnderlying(other_edge_index), collides);
                 return collides;
             },
             nullptr
@@ -914,7 +919,7 @@ class EdgeSoup
 
             for (const EdgeEntry &entry : edge_entries)
             {
-                IMP_EDGESOUP_DEBUG("edge {}", typename AabbTree::NodeIndex(entry.edge_index));
+                IMP_EDGESOUP_DEBUG("edge {}", EdgeIndexToUnderlying(entry.edge_index));
 
                 Edge world_self_edge = entry.edge;
                 world_self_edge.a = self_pos + self_rot * world_self_edge.a;
@@ -923,7 +928,7 @@ class EdgeSoup
 
                 for (const CollisionCandidate &candidate : entry.collision_candidates)
                 {
-                    IMP_EDGESOUP_DEBUG("  candidate {}", typename AabbTree::NodeIndex(candidate.edge_index));
+                    IMP_EDGESOUP_DEBUG("  candidate {}", EdgeIndexToUnderlying(candidate.edge_index));
 
                     Edge world_other_edge = candidate.edge;
                     world_other_edge.a = other_pos + other_rot * world_other_edge.a;
@@ -977,7 +982,8 @@ class EdgeSoup
         struct Params
         {
             // This needs to stay alive as long as the object is used.
-            Storage::MonotonicPool *persistent_pool = nullptr;
+            // Which isn't that long, since it's not needed after `Finalize()`.
+            Storage::MonotonicPool *temp_pool = nullptr;
 
             // The starting capacity of point lists in edges.
             // This is used when the first point is inserted, before that the capacity is zero.
@@ -1003,6 +1009,10 @@ class EdgeSoup
             std::span<PointDesc> points;
             // The number of objects we can store at `points.data()`.
             std::size_t points_capacity = 0;
+
+            // The indices of the first and last collision groups.
+            int first_collision = -1;
+            int last_collision = -1;
         };
 
       private:
@@ -1023,8 +1033,8 @@ class EdgeSoup
         {
             state.self = &self;
             state.params = std::move(params);
-            state.edge_entries = state.params.persistent_pool->template AllocateArray<EdgeEntry>(state.self->NumSparseEdges());
-            state.edges_with_points = {state.params.persistent_pool->template AllocateArray<EdgeIndex>(state.self->NumEdges()).data(), 0};
+            state.edge_entries = state.params.temp_pool->template AllocateArray<EdgeEntry>(state.self->NumSparseEdges());
+            state.edges_with_points = {state.params.temp_pool->template AllocateArray<EdgeIndex>(state.self->NumEdges()).data(), 0};
         }
 
         CollisionPointsAccumulator(CollisionPointsAccumulator &&other) noexcept : state(std::exchange(other.state, {})) {}
@@ -1043,13 +1053,13 @@ class EdgeSoup
         // Returns the information about the specified edge.
         [[nodiscard]] const EdgeEntry &GetEdgeEntry(EdgeIndex index) const
         {
-            return state.edge_entries[typename AabbTree::NodeIndex(index)];
+            return state.edge_entries[EdgeIndexToUnderlying(index)];
         }
 
         // Note, the collider must use the same object as 'self' as was passed to the constructor.
         void AddPoint(const EdgeSoupCollider::CallbackData &data)
         {
-            EdgeEntry &edge_entry = state.edge_entries[typename AabbTree::NodeIndex(data.self_edge_index)];
+            EdgeEntry &edge_entry = state.edge_entries[EdgeIndexToUnderlying(data.self_edge_index)];
 
             // Check that we have enough capacity in the point list.
             ASSERT(edge_entry.points.size() <= edge_entry.points_capacity);
@@ -1069,7 +1079,7 @@ class EdgeSoup
                     edge_entry.points_capacity *= state.params.edge_points_capacity_factor;
                 }
 
-                PointDesc *new_points = state.params.persistent_pool->template AllocateArray<PointDesc>(edge_entry.points_capacity).data();
+                PointDesc *new_points = state.params.temp_pool->template AllocateArray<PointDesc>(edge_entry.points_capacity).data();
                 std::move(edge_entry.points.begin(), edge_entry.points.end(), new_points);
                 edge_entry.points = {new_points, edge_entry.points.size()/*sic*/};
             }
@@ -1081,6 +1091,23 @@ class EdgeSoup
             new_point.self_num = data.num_self;
             new_point.den = data.den;
             new_point.other_enters_self = (data.world_self_edge.b - data.world_self_edge.a) /cross/ (data.world_other_edge.b - data.world_other_edge.a) > 0;
+        }
+
+        void Finalize()
+        {
+            // Handle non-empty edges.
+            for (EdgeIndex edge_index : state.edges_with_points)
+            {
+                EdgeEntry &edge_entry = state.edge_entries[EdgeIndexToUnderlying(edge_index)];
+
+                // Sort points by fraction `self_num/den`.
+                std::sort(edge_entry.points.begin(), edge_entry.points.end(), [](const PointDesc &a, const PointDesc &b)
+                {
+                    return a.self_num * b.den < b.self_num * a.den;
+                });
+
+
+            }
         }
     };
 };
