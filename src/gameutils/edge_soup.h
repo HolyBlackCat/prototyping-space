@@ -15,7 +15,6 @@
 // The collisions only work correctly if the contour is watertight.
 // The contour is sensitive to the winding direction. The correct direction is CW if the Y points down.
 // The edge coorinates are inclusive.
-// But
 // * (hence "soup", compare with a common phrase "triangle soup")
 template <Math::scalar T>
 class EdgeSoup
