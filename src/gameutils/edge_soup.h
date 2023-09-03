@@ -630,7 +630,7 @@ class EdgeSoup
                 [&](EdgeIndex edge_index, const EdgeWithData &edge, const Edge &transformed_edge)
                 {
                     (void)edge_index;
-                    return transformed_edge.Bounds().expand_dir(-other_delta_vel).expand(
+                    return transformed_edge.Bounds().expand_dir(-other_delta_vel_in_other).expand(
                         params.hitbox_expansion_epsilon
                         + edge.max_distance_to_origin * params.self_angular_vel_abs_upper_bound
                         + (edge.max_distance_to_origin + max_distance_to_other) * params.other_angular_vel_abs_upper_bound
