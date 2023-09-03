@@ -492,6 +492,9 @@ TEST_CASE("edge_soup.soup_to_soup")
         T shape_a;
         shape_a.AddLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
 
+        T shape_a_offset;
+        shape_a_offset.AddLoop({fvec2(-30+4,4),fvec2(-30-4,4),fvec2(-30-4,-4),fvec2(-30+4,-4)});
+
         T shape_b;
         shape_b.AddLoop({fvec2(3,0),fvec2(0,3),fvec2(-3,0),fvec2(0,-3)});
 
@@ -530,7 +533,7 @@ TEST_CASE("edge_soup.soup_to_soup")
                     {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
                 });
 
-                // Approaching fixed body.
+                // Approaching static body.
                 Collide(shape_a, shape_b, 1, fvec2(), angle_a, fvec2(), 0, fvec2(-25,0), angle_b, fvec2(20,0), 0, {
                     {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
                     {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
@@ -540,7 +543,7 @@ TEST_CASE("edge_soup.soup_to_soup")
                     {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
                 });
 
-                // Overshooting fixed body.
+                // Overshooting static body.
                 Collide(shape_a, shape_b, 0.5f, fvec2(), angle_a, fvec2(), 0, fvec2(-25,0), angle_b, fvec2(40,0), 0, {
                     {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
                     {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
@@ -549,9 +552,39 @@ TEST_CASE("edge_soup.soup_to_soup")
                     {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
                     {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
                 });
+
+                // Approaching moving body from the front.
+                Collide(shape_a, shape_b, 1, fvec2(10,0), angle_a, fvec2(-10,0), 0, fvec2(-35,0), angle_b, fvec2(30,0), 0, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+                });
+                Collide(shape_a, shape_b, 0.5f, fvec2(10,0), angle_a, fvec2(-20,0), 0, fvec2(-35,0), angle_b, fvec2(60,0), 0, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+                });
+
+                // Approaching moving body from the side.
+                Collide(shape_a, shape_b, 1, fvec2(0,-20), angle_a, fvec2(0,20), 0, fvec2(-5,10), angle_b, fvec2(0,-10), 0, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+                });
+                Collide(shape_a, shape_b, 0.5f, fvec2(0,-20), angle_a, fvec2(0,40), 0, fvec2(-5,10), angle_b, fvec2(0,-20), 0, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+                });
+
+                // Approaching moving body diagonally.
+                Collide(shape_a, shape_b, 1, fvec2(10,-20), angle_a, fvec2(-10,20), 0, fvec2(-35,10), angle_b, fvec2(30,-10), 0, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+                });
+                Collide(shape_a, shape_b, 0.5f, fvec2(10,-20), angle_a, fvec2(-20,40), 0, fvec2(-35,10), angle_b, fvec2(60,-20), 0, {
+                    {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = b3},
+                    {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = b0},
+                });
             }
 
-            // Offset body.
+            // Offset body, and the other is fixed.
 
             // No collision.
             Collide(shape_a, shape_b_offset, 1, fvec2(), angle_a, fvec2(), 0, fvec2(), 0, fvec2(), 0, {});
@@ -651,6 +684,18 @@ TEST_CASE("edge_soup.soup_to_soup")
                     {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
                 });
             }
+
+            // Offset body, and the other is moving.
+            Collide(shape_a, shape_b_offset, 1, fvec2(30,10), angle_a, fvec2(-30,-10), 0, fvec2(-25,-20), -f_pi/2, fvec2(0,20), f_pi/2, {
+                {.pos = fvec2(-4,-2), .self_edge = a1, .other_edge = 3},
+                {.pos = fvec2(-4, 2), .self_edge = a1, .other_edge = 0},
+            });
         }
+
+        // Both bodies have offset.
+        Collide(shape_a_offset, shape_b_offset, 1, fvec2(0,40), 0, fvec2(0,-10), f_pi/2, fvec2(-5,-40), 0, fvec2(0,20), f_pi/2, {
+            {.pos = fvec2(-4,-2), .self_edge = 0, .other_edge = 2},
+            {.pos = fvec2(-4, 2), .self_edge = 0, .other_edge = 3},
+        });
     }
 }
