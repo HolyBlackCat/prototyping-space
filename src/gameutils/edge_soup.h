@@ -66,16 +66,12 @@ class EdgeSoup
             return a + (b - a) * num / den;
         }
 
-        enum class EdgeCollisionMode
-        {
-            parallel_unspecified, // Parallel edges are handled in an unspecified way. (In practice, should be true if they are on the same line.)
-            parallel_rejected, // Parallel edges are always considered not colliding.
-        };
-
+        // Check if this edge collides with `other`. The edges are half-open, including `a` but excluding `b`.
+        // Parallel edges are never considered colliding.
         // If specified, `func` is called on collision, with three parameters: `(scalar num_self, scalar num_other, scalar den) -> void`.
         // `num_self / den` is the fractional position on self edge, and `num_other / den` is the fractional position on the other edge.
         template <typename F = std::nullptr_t>
-        [[nodiscard]] bool CollideWithEdgeInclusive(Edge other, EdgeCollisionMode mode, F &&func = nullptr) const
+        [[nodiscard]] bool CollideWithEdge(Edge other, F &&func = nullptr) const
         {
             // This is essentially `all_of(0 <= Math::point_dir_intersection_factor_two_way(...)[i] <= 1)`, but without division.
             vector delta_a = other.a - a;
@@ -83,14 +79,15 @@ class EdgeSoup
             vector delta_other = other.b - other.a;
             scalar d = delta_self /cross/ delta_other;
 
-            if (mode == EdgeCollisionMode::parallel_rejected && d == 0)
-                return false;
+            // If you want edges to be inclusive on both sides, you need to do `if (d == 0) return false;` here,
+            //   otherwise the parallel edges lying on the same line would always return true.
+            // This isn't needed when the second point is exclusive, because of the `< abs_d` test below (which becomes `<= abs_d` if the second point is inclusive).
 
             scalar abs_d = abs(d);
 
             scalar u = delta_a /cross/ delta_other;
             scalar v = delta_a /cross/ delta_self;
-            bool ret = abs(u) <= abs_d && abs(v) <= abs_d && u * d >= 0 && v * d >= 0;
+            bool ret = abs(u) < abs_d && abs(v) < abs_d && u * d >= 0 && v * d >= 0;
             if constexpr (!std::is_null_pointer_v<F>)
             {
                 if (ret)
@@ -724,7 +721,7 @@ class EdgeSoup
             {
                 (void)self_edge_index;
                 (void)self_edge;
-                bool collides = self_transformed_edge.CollideWithEdgeInclusive(other.GetEdge(other_edge_index), Edge::EdgeCollisionMode::parallel_rejected);
+                bool collides = self_transformed_edge.CollideWithEdge(other.GetEdge(other_edge_index));
                 IMP_EDGESOUP_DEBUG("{} to {} -> {}", EdgeIndexToUnderlying(self_edge_index), EdgeIndexToUnderlying(other_edge_index), collides);
                 return collides;
             },
@@ -896,7 +893,7 @@ class EdgeSoup
             const EdgeWithData &other_edge; // In other coords.
             const Edge &world_other_edge; // In world coords.
 
-            // The relative intersection position on the edges, like in `Edge::CollideWithEdgeInclusive()`.
+            // The relative intersection position on the edges, like in `Edge::CollideWithEdge()`.
             scalar num_self = 0;
             scalar num_other = 0;
             scalar den = 1;
@@ -946,13 +943,13 @@ class EdgeSoup
                     IMP_EDGESOUP_DEBUG("{}-{} -> {}-{}", candidate.edge.a, candidate.edge.b, world_other_edge.a, world_other_edge.b);
                     if constexpr (std::is_null_pointer_v<F>)
                     {
-                        if (world_self_edge.CollideWithEdgeInclusive(world_other_edge, Edge::EdgeCollisionMode::parallel_rejected))
+                        if (world_self_edge.CollideWithEdge(world_other_edge))
                             return true;
                     }
                     else
                     {
                         bool stop = false;
-                        (void)world_self_edge.CollideWithEdgeInclusive(world_other_edge, Edge::EdgeCollisionMode::parallel_rejected, [&](scalar num_self, scalar num_other, scalar den)
+                        (void)world_self_edge.CollideWithEdge(world_other_edge, [&](scalar num_self, scalar num_other, scalar den)
                         {
                             if (func(CallbackData{
                                 .self_edge_index  = entry.edge_index,
@@ -1194,80 +1191,6 @@ class EdgeSoup
             new_point.other_enters_self = (data.world_self_edge.b - data.world_self_edge.a) /cross/ (data.world_other_edge.b - data.world_other_edge.a) > 0;
             new_point.other_edge_index = data.other_edge_index;
             new_point.other_normal = data.other_edge.normal;
-        }
-
-        // Normally this happens as a part of `Finalize()`. Calling this manually doesn't make much sense.
-        // Tries to remove duplicate points, and fills the `..._2` fields in the merged points.
-        void OnlyDeduplicatePoints()
-        {
-            // Deduplicate points inside the same edge.
-            for (EdgeIndex edge_index : state.edges_with_points)
-            {
-                EdgeEntry &edge_entry = state.edge_entries[EdgeIndexToUnderlying(edge_index)];
-
-                if (!edge_entry.points.empty())
-                {
-                    // Sort the points by the position on the edge.
-                    // Resolve the ties so that `.other_enters_self == true` points go first.
-                    std::sort(edge_entry.points.begin(), edge_entry.points.end(), [](const PointDesc &a, const PointDesc &b)
-                    {
-                        if (auto d = a.num_self * b.den - b.num_self * a.den)
-                            return d < 0;
-                        if (auto d = a.other_enters_self - b.other_enters_self)
-                            return d > 0;
-                        return false;
-                    });
-
-                    // Deduplicate overlapping points.
-                    std::size_t source_index = 0;
-                    std::size_t num_resulting_points = 0;
-
-                    PointDesc *last_target_point = nullptr;
-
-                    while (source_index < edge_entry.points.size())
-                    {
-                        const PointDesc &source_point = edge_entry.points[source_index];
-
-                        if (last_target_point && last_target_point->ShouldMergeWithOnSameEdge(source_point))
-                        {
-                            last_target_point->MergeWith(null_edge, source_point);
-                        }
-                        else
-                        {
-                            last_target_point = &(edge_entry.points[num_resulting_points++] = source_point);
-                        }
-
-                        source_index++;
-                    }
-
-                    edge_entry.points = edge_entry.points.first(num_resulting_points);
-                }
-            }
-
-            // Deduplicate points between the edges.
-            for (EdgeIndex edge_index : state.edges_with_points)
-            {
-                EdgeEntry &edge_entry = state.edge_entries[EdgeIndexToUnderlying(edge_index)];
-
-                if (!edge_entry.points.empty())
-                {
-                    EdgeIndex prev_edge_index = state.self->GetEdge(edge_index).prev;
-                    EdgeEntry &prev_edge_entry = state.edge_entries[EdgeIndexToUnderlying(prev_edge_index)];
-
-                    if (!prev_edge_entry.points.empty())
-                    {
-                        PointDesc &this_point = edge_entry.points.front();
-                        PointDesc &prev_point = prev_edge_entry.points.back();
-
-                        if (this_point.ShouldMergeWithIgnoringPosition(prev_point)
-                            && this_point.num_self == 0 && prev_point.num_self == prev_point.den)
-                        {
-                            this_point.MergeWith(prev_edge_index, prev_point);
-                            prev_edge_entry.points = prev_edge_entry.points.first(prev_edge_entry.points.size() - 1);
-                        }
-                    }
-                }
-            }
         }
 
         // [[nodiscard]] CollisionData Finalize(Storage::MonotonicPool &persistent_pool)
