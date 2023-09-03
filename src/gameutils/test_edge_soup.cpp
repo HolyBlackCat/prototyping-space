@@ -58,14 +58,51 @@ TEST_CASE("edge_soup.editor")
 
         edge = e.AddEdge({{22,12},{22,18}});
         REQUIRE(c.GetEdge(edge).dense_index == 3);
+        CheckDenseIndices(c);
         REQUIRE((!e.IsComplete() && e.NumDetachedPoints() == 4));
 
         edge = e.AddEdge({{20,10},{22,12}});
         REQUIRE(c.GetEdge(edge).dense_index == 4);
+        CheckDenseIndices(c);
         REQUIRE((!e.IsComplete() && e.NumDetachedPoints() == 2));
 
         edge = e.AddEdge({{22,18},{20,20}});
         REQUIRE(c.GetEdge(edge).dense_index == 5);
+        CheckDenseIndices(c);
+        REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+    });
+    AssertCorrectness(c);
+
+    ASSERT(c.GetEdge(c.GetEdgeIndex(2)).a == ivec2(20,20));
+    ASSERT(c.GetEdge(c.GetEdgeIndex(2)).b == ivec2(10,20));
+    ASSERT(c.GetEdge(c.GetEdgeIndex(1)).a == ivec2(10,20));
+    ASSERT(c.GetEdge(c.GetEdgeIndex(1)).b == ivec2(10,10));
+
+    c.Edit([&](T::Editor &e)
+    {
+        REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+
+        e.RemoveEdge(c.GetEdgeIndex(2));
+        CheckDenseIndices(c);
+        REQUIRE((!e.IsComplete() && e.NumDetachedPoints() == 2));
+
+        e.RemoveEdge(c.GetEdgeIndex(1));
+        CheckDenseIndices(c);
+        REQUIRE((!e.IsComplete() && e.NumDetachedPoints() == 2));
+
+        e.AddPath({{20,20}, {12,18}, {10,10}});
+        CheckDenseIndices(c);
+        REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
+
+        e.RemoveEdge(c.GetEdgeIndex(4));
+        CheckDenseIndices(c);
+        REQUIRE((!e.IsComplete() && e.NumDetachedPoints() == 2));
+        e.RemoveEdge(c.GetEdgeIndex(4));
+        REQUIRE((!e.IsComplete() && e.NumDetachedPoints() == 2));
+        CheckDenseIndices(c);
+
+        e.AddPath({{20,20}, {10,10}});
+        CheckDenseIndices(c);
         REQUIRE((e.IsComplete() && e.NumDetachedPoints() == 0));
     });
 }
