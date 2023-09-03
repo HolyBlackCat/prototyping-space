@@ -36,6 +36,30 @@ class EdgeSoup
             ret.b = next_value(ret.b);
             return ret;
         }
+
+        enum class EdgeCollisionMode
+        {
+            parallelUnspecified, // Parallel edges are handled in an unspecified way. (In practice, should be true if they are on the same line.)
+            parallelRejected, // Parallel edges are always considered not colliding.
+        };
+
+        [[nodiscard]] bool CollideWithEdgeInclusive(Edge other, EdgeCollisionMode mode) const
+        {
+            // This is essentially `all_of(0 <= Math::point_dir_intersection_factor_two_way(...)[i] <= 1)`, but without division.
+            vector delta_a = other.a - a;
+            vector delta_self = b - a;
+            vector delta_other = other.b - other.a;
+            scalar d = delta_self /cross/ delta_other;
+
+            if (mode == EdgeCollisionMode::parallelRejected && d == 0)
+                return false;
+
+            scalar abs_d = abs(d);
+
+            scalar u = (delta_a /cross/ delta_other);
+            scalar v = (delta_a /cross/ delta_self);
+            return abs(u) <= abs_d && abs(v) <= abs_d && u * d >= 0 && v * d >= 0;
+        }
     };
 
     using AabbTree = AabbTree<vec2<T>, Edge>;
