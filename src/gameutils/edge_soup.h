@@ -11,10 +11,14 @@
 #define IMP_CONTOUR_DEBUG(...) // (std::cout << FMT(__VA_ARGS__) << '\n')
 
 // Represents a 2D contour.
-// Internally stores independent edges, but the collisions only work correctly if the contour is watertight.
+// The edges are stored independently* of each other, in an AABB tree.
+// The collisions only work correctly if the contour is watertight.
 // The contour is sensitive to the winding direction. The correct direction is CW if the Y points down.
+// The edge coorinates are inclusive.
+// But
+// * (hence "soup", compare with a common phrase "triangle soup")
 template <Math::scalar T>
-class ContourShape
+class EdgeSoup
 {
   public:
     using scalar = T;
@@ -44,7 +48,7 @@ class ContourShape
     AabbTree aabb_tree;
 
   public:
-    constexpr ContourShape() : aabb_tree(typename AabbTree::Params(vector(0))) {}
+    constexpr EdgeSoup() : aabb_tree(typename AabbTree::Params(vector(0))) {}
 
     [[nodiscard]] bool IsEmpty() const
     {
@@ -100,7 +104,7 @@ class ContourShape
     // Performs collision tests.
     class Collider
     {
-        const ContourShape *target = nullptr;
+        const EdgeSoup *target = nullptr;
 
         // The ray parameters for point collisions.
         // The ray always points in one of the 4 cardinal directions.
@@ -109,7 +113,7 @@ class ContourShape
 
       public:
         // See (and use) `MakeCollider()` below.
-        Collider(const ContourShape &new_target, int ray_dir)
+        Collider(const EdgeSoup &new_target, int ray_dir)
             : target(&new_target)
         {
             ray_dir &= 3;
@@ -147,7 +151,7 @@ class ContourShape
                 int b_side_sign = sign(edge.b[!ray_vertical] - point[!ray_vertical]);
                 if (a_side_sign == b_side_sign)
                 {
-                    IMP_CONTOUR_DEBUG("{} doesn't cross the ray line", edge_index);
+                    IMP_CONTOUR_DEBUG("edge {} doesn't cross the ray line", edge_index);
                     return false;
                 }
 
