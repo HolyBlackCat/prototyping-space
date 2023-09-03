@@ -664,17 +664,28 @@ class EdgeSoup
             );
         }
 
+        struct CallbackData
+        {
+            // Self edge.
+            EdgeIndex self_edge_index;
+            const Edge &self_edge; // In self coords.
+            const Edge &world_self_edge; // In world coords.
+
+            // Other edge.
+            EdgeIndex other_edge_index;
+            const Edge &other_edge; // In other coords.
+            const Edge &world_other_edge; // In world coords.
+
+            // The relative intersection position on the edges, like in `Edge::CollideWithEdgeInclusive()`.
+            scalar num_self = 0;
+            scalar num_other = 0;
+            scalar den = 1;
+        };
+
         // If `func` is not specified, returns true on collision.
         // If `func` is specified, it's called for every edge collision point.
         // If it returns true, the function stops immediately and also returns true.
-        // `func` is `(
-        //     EdgeIndex self_edge_index, const Edge &self_edge, const Edge &world_self_edge,
-        //     EdgeIndex other_edge_index, const Edge &other_edge, const Edge &world_other_edge,
-        //     scalar num_self, scalar num_other, scalar den
-        // ) -> bool`.
-        // The first three parameters describe the self colliding edge. The next three parameters describe the other colliding edge.
-        // The `world_*` parameters receive edges transformed to world coorinates.
-        // The last three parameters describe the collision point as for `Edge::CollideWithEdgeInclusive()`.
+        // `func` is `(EdgeSoupCollider::CallbackData data) -> bool`.
         template <typename F = std::nullptr_t>
         bool Collide(vector self_pos, matrix self_rot, vector other_pos, matrix other_rot, F &&func = nullptr)
         {
@@ -713,10 +724,17 @@ class EdgeSoup
                         bool stop = false;
                         (void)world_self_edge.CollideWithEdgeInclusive(world_other_edge, Edge::EdgeCollisionMode::parallel_rejected, [&](scalar num_self, scalar num_other, scalar den)
                         {
-                            if (func(
-                                entry.edge_index, entry.edge, world_self_edge,
-                                candidate.edge_index, candidate.edge, world_other_edge,
-                                num_self, num_other, den))
+                            if (func(CallbackData{
+                                .self_edge_index  = entry.edge_index,
+                                .self_edge        = entry.edge,
+                                .world_self_edge  = world_self_edge,
+                                .other_edge_index = candidate.edge_index,
+                                .other_edge       = candidate.edge,
+                                .world_other_edge = world_other_edge,
+                                .num_self         = num_self,
+                                .num_other        = num_other,
+                                .den              = den,
+                            }))
                             {
                                 stop = true;
                             }

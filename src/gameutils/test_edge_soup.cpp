@@ -372,25 +372,16 @@ TEST_CASE("edge_soup.soup_to_soup")
             fmat2 col_mat_a = fmat2::rotate(angle_a + rot_a * t);
             fmat2 col_mat_b = fmat2::rotate(angle_b + rot_b * t);
             collider.Collide(col_pos_a, col_mat_a, col_pos_b, col_mat_b,
-                [&](
-                    T::EdgeIndex self_edge_index, const T::Edge &self_edge, const T::Edge &world_self_edge,
-                    T::EdgeIndex other_edge_index, const T::Edge &other_edge, const T::Edge &world_other_edge,
-                    T::scalar num_self, T::scalar num_other, T::scalar den
-                ) -> bool
+                [&](T::EdgeSoupCollider::CallbackData data) -> bool
                 {
-                    (void)self_edge_index;
-                    (void)self_edge;
-                    (void)other_edge_index;
-                    (void)other_edge;
-                    (void)world_other_edge;
-                    (void)num_other;
+                    (void)data;
 
                     REQUIRE_MESSAGE(!points.empty(), "More collisions than expected.");
 
-                    fvec2 point = world_self_edge.Point(num_self, den);
-                    REQUIRE(PointsNear(point, world_other_edge.Point(num_other, den)));
-                    REQUIRE(PointsNear(point, col_mat_a * self_edge.Point(num_self, den) + col_pos_a));
-                    REQUIRE(PointsNear(point, col_mat_b * other_edge.Point(num_other, den) + col_pos_b));
+                    fvec2 point = data.world_self_edge.Point(data.num_self, data.den);
+                    REQUIRE(PointsNear(point, data.world_other_edge.Point(data.num_other, data.den)));
+                    REQUIRE(PointsNear(point, col_mat_a * data.self_edge.Point(data.num_self, data.den) + col_pos_a));
+                    REQUIRE(PointsNear(point, col_mat_b * data.other_edge.Point(data.num_other, data.den) + col_pos_b));
 
                     [[maybe_unused]] bool has_near_points = false;
                     auto it = std::find_if(points.begin(), points.end(), [&](const CollidingPoint &p)
@@ -405,9 +396,9 @@ TEST_CASE("edge_soup.soup_to_soup")
                         if (inv)
                             std::swap(expected_self_edge, expected_other_edge);
 
-                        if (expected_self_edge && shape_a.GetEdge(self_edge_index).dense_index != *expected_self_edge)
+                        if (expected_self_edge && shape_a.GetEdge(data.self_edge_index).dense_index != *expected_self_edge)
                             return false;
-                        if (expected_other_edge && shape_b.GetEdge(other_edge_index).dense_index != *expected_other_edge)
+                        if (expected_other_edge && shape_b.GetEdge(data.other_edge_index).dense_index != *expected_other_edge)
                             return false;
                         return true;
                     });
