@@ -5,8 +5,38 @@
 
 #include "edge_soup.h"
 
+// Tests the edge editing interface.
+TEST_CASE("edge_soup.editor")
+{
+    using T = EdgeSoup<int>;
+
+    auto AssertCorrectness = [](const T &soup)
+    {
+        for (int i = 0; i < soup.NumEdges(); i++)
+        {
+            CAPTURE(i);
+            const auto &edge = soup.GetEdge(soup.GetEdgeIndex(i));
+            REQUIRE(edge.prev != T::null_edge);
+            REQUIRE(edge.next != T::null_edge);
+            [[maybe_unused]] const auto &prev_edge = soup.GetEdge(edge.prev);
+            [[maybe_unused]] const auto &next_edge = soup.GetEdge(edge.next);
+            REQUIRE_EQ(edge.a, prev_edge.b);
+            REQUIRE_EQ(edge.b, next_edge.a);
+        }
+    };
+
+    T c;
+    c.AddClosedLoop({{10,10}, {20,10}, {20,20}, {10, 20}});
+    AssertCorrectness(c);
+    ASSERT(c.NumEdges() == 4);
+    ASSERT(c.GetEdge(c.GetEdgeIndex(0)).a == ivec2(10,10));
+    ASSERT(c.GetEdge(c.GetEdgeIndex(1)).a == ivec2(20,10));
+    ASSERT(c.GetEdge(c.GetEdgeIndex(2)).a == ivec2(20,20));
+    ASSERT(c.GetEdge(c.GetEdgeIndex(3)).a == ivec2(10,20));
+}
+
 // Some basic point collision tests.
-TEST_CASE("edge_soup.basic")
+TEST_CASE("edge_soup.point_to_soup.basic")
 {
     #define COLLIDE_POINT(c_, point_, result_, .../*allowed ray dirs*/) \
         do \
@@ -22,7 +52,7 @@ TEST_CASE("edge_soup.basic")
 
     // An octagon with no axis-aligned edges.
     constexpr int halfsize = 100, gap = 20;
-    c.AddLoop(std::array{
+    c.AddClosedLoop(std::array{
         ivec2(halfsize        ,                0),
         ivec2(halfsize*2 - gap,              gap),
         ivec2(halfsize*2      , halfsize        ),
@@ -72,17 +102,17 @@ TEST_CASE("edge_soup.basic")
 }
 
 // Rasterize using point collisions and compare against reference.
-TEST_CASE("edge_soup.pixelperfect.basic")
+TEST_CASE("edge_soup.point_to_soup.pixelperfect.basic")
 {
     EdgeSoup<int> c;
-    c.AddLoop(std::array{
+    c.AddClosedLoop(std::array{
         ivec2( 6, 0),
         ivec2(12, 6),
         ivec2( 6,12),
         ivec2( 0, 6),
     });
     // Hole:
-    c.AddLoop(std::array{
+    c.AddClosedLoop(std::array{
         ivec2( 2, 6),
         ivec2( 6,10),
         ivec2(10, 6),
@@ -125,10 +155,10 @@ TEST_CASE("edge_soup.pixelperfect.basic")
 
 // Rasterize using point collisions and compare against reference.
 // This additionally includes axis-aligned edges.
-TEST_CASE("edge_soup.pixelperfect.axis_aligned")
+TEST_CASE("edge_soup.point_to_soup.pixelperfect.axis_aligned")
 {
     EdgeSoup<int> c;
-    c.AddLoop(std::array{
+    c.AddClosedLoop(std::array{
         ivec2( 4, 0),
         ivec2( 8, 0),
         ivec2(12, 4),
@@ -139,7 +169,7 @@ TEST_CASE("edge_soup.pixelperfect.axis_aligned")
         ivec2( 0, 4),
     });
     // Hole:
-    c.AddLoop(std::array{
+    c.AddClosedLoop(std::array{
         ivec2( 2, 5),
         ivec2( 2, 7),
         ivec2( 5,10),
@@ -188,7 +218,7 @@ TEST_CASE("edge_soup.pixelperfect.axis_aligned")
 TEST_CASE("edge_soup.overhands")
 {
     EdgeSoup<int> c;
-    c.AddLoop(std::array{
+    c.AddClosedLoop(std::array{
         ivec2(  0, 0),
         ivec2(  5,20),
         ivec2(  0,15), // Sharp edge, angles backwards.
@@ -422,10 +452,10 @@ TEST_CASE("edge_soup.soup_to_soup")
 
     { // Simple collision.
         T shape_a;
-        shape_a.AddLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
+        shape_a.AddClosedLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
 
         T shape_b;
-        shape_b.AddLoop({fvec2(3,0),fvec2(0,3),fvec2(0,-3)});
+        shape_b.AddClosedLoop({fvec2(3,0),fvec2(0,3),fvec2(0,-3)});
 
         // No collision, we're fully inside.
         Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(), 0, fvec2(), 0, {});
@@ -452,9 +482,9 @@ TEST_CASE("edge_soup.soup_to_soup")
 
     { // Box to box with parallel lines.
         T shape_a;
-        shape_a.AddLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
+        shape_a.AddClosedLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
         T shape_b;
-        shape_b.AddLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
+        shape_b.AddClosedLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
 
         // Exact match, the corners collide.
         Collide(shape_a, shape_b, 1, fvec2(), 0, fvec2(), 0, fvec2(), 0, fvec2(), 0, {
@@ -483,16 +513,16 @@ TEST_CASE("edge_soup.soup_to_soup")
 
     { // Movement.
         T shape_a;
-        shape_a.AddLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
+        shape_a.AddClosedLoop({fvec2(4,4),fvec2(-4,4),fvec2(-4,-4),fvec2(4,-4)});
 
         T shape_a_offset;
-        shape_a_offset.AddLoop({fvec2(-30+4,4),fvec2(-30-4,4),fvec2(-30-4,-4),fvec2(-30+4,-4)});
+        shape_a_offset.AddClosedLoop({fvec2(-30+4,4),fvec2(-30-4,4),fvec2(-30-4,-4),fvec2(-30+4,-4)});
 
         T shape_b;
-        shape_b.AddLoop({fvec2(3,0),fvec2(0,3),fvec2(-3,0),fvec2(0,-3)});
+        shape_b.AddClosedLoop({fvec2(3,0),fvec2(0,3),fvec2(-3,0),fvec2(0,-3)});
 
         T shape_b_offset;
-        shape_b_offset.AddLoop({fvec2(20+3,0),fvec2(20,3),fvec2(20-3,0),fvec2(20,-3)});
+        shape_b_offset.AddClosedLoop({fvec2(20+3,0),fvec2(20,3),fvec2(20-3,0),fvec2(20,-3)});
 
         for (int rot_index_a = 0; rot_index_a < 4; rot_index_a++)
         {

@@ -3,8 +3,18 @@
 #include <algorithm>
 #include <iterator>
 #include <new>
-#include <ranges>
 #include <span>
+#include <utility>
+
+IMP_PLATFORM_IF(clang)(
+    IMP_DIAGNOSTICS_PUSH
+    IMP_DIAGNOSTICS_IGNORE("-Wdeprecated-builtins")
+    IMP_DIAGNOSTICS_IGNORE("-Wdeprecated-declarations")
+)
+#include <parallel_hashmap/phmap.h>
+IMP_PLATFORM_IF(clang)(
+    IMP_DIAGNOSTICS_POP
+)
 
 #include "program/errors.h"
 #include "utils/aabb_tree.h"
@@ -87,17 +97,29 @@ class EdgeSoup
         }
     };
 
+    struct EdgeWithData;
+
+    using AabbTree = AabbTree<vec2<T>, EdgeWithData>;
+
+    // NOTE: Those indices are not consecutive, that's why it's `enum class`.
+    // For consecutive indices, use `GetEdge(edge_index).dense_index`.
+    enum class EdgeIndex : typename AabbTree::NodeIndex {};
+
+    // This ID is guaranteed to be unused.
+    static constexpr EdgeIndex null_edge = EdgeIndex(AabbTree::null_index);
+
     struct EdgeWithData : Edge
     {
         int dense_index = 0; // 0 <= ... < NumEdges()
+
+        // Previous and next edges in the loop, or `null_edge` if there are somehow none.
+        EdgeIndex prev = null_edge;
+        EdgeIndex next = null_edge;
 
         // How far the edge is from the local origin. The maximum of the two points' distances is used.
         // For integral `T`s, an upper bound approximation is used.
         scalar max_distance_to_origin = 0;
     };
-
-    using AabbTree = AabbTree<vec2<T>, EdgeWithData>;
-    enum class EdgeIndex : typename AabbTree::NodeIndex {};
 
     static constexpr EdgeIndex null_index = EdgeIndex(AabbTree::null_index);
 
@@ -137,6 +159,12 @@ class EdgeSoup
     // This is not exactly intuitive.
     SparseSet<int> dense_edge_indices;
 
+    // Returns a mutable reference to the edge by index.
+    [[nodiscard]] EdgeWithData &GetEdgeMutable(EdgeIndex edge_index)
+    {
+        return aabb_tree.GetNodeUserData(typename AabbTree::NodeIndex(edge_index));
+    }
+
   public:
     constexpr EdgeSoup() : aabb_tree(typename AabbTree::Params(vector(0))) {}
 
@@ -171,60 +199,235 @@ class EdgeSoup
         return EdgeIndex(dense_edge_indices.GetElem(dense_edge_index));
     }
 
-    // Inserts a new edge.
-    // Save the index to be able to remove it later.
-    // NOTE: Those indices are not consecutive, that's why `EdgeIndex` is a `enum class`.
-    // For consecutive indices, use `GetEdge(edge_index).dense_index`.
-    EdgeIndex AddEdge(Edge edge)
+    // This is used to edit the edges.
+    // Can't be created directly, instead call `Edit()` on the target object.
+    class Editor
     {
-        EdgeWithData edge_with_data;
-        edge_with_data.Edge::operator=(edge);
-        edge_with_data.max_distance_to_origin = MaxEdgeDistanceToOrigin(edge_with_data);
-        edge_with_data.dense_index = dense_edge_indices.ElemCount(); // Sic.
-        auto ret = aabb_tree.AddNode(edge.Bounds(), std::move(edge_with_data));
+        friend EdgeSoup;
+        EdgeSoup *target = nullptr;
 
-        // `SparseSet` doesn't auto-increase capacity.
-        // Since `AabbTree::AddNode()` already calculates a suitable capacity, we just reuse it here.
-        dense_edge_indices.Reserve(aabb_tree.Nodes().Capacity());
-        dense_edge_indices.Insert(ret);
+        // Maps point to edge that starts/ends at that point, and doesn't have an adjacent edge in that direction.
+        phmap::flat_hash_map<vector, EdgeIndex> missing_prev, missing_next;
 
-        return EdgeIndex(ret);
-    }
+        constexpr Editor() {}
 
-    // Adds an edge loop from the vertices.
-    template <std::input_iterator I, std::sentinel_for<I> J = I>
-    void AddLoop(I begin, J end)
-    {
-        vector prev;
-        vector first_point = *begin;
-        bool first = true;
-        while (begin != end)
+        void Finish()
         {
-            if (!first)
-            {
-                AddEdge({.a = prev, .b = *begin});
-            }
-            first = false;
-            prev = *begin;
-            ++begin;
+            ASSERT(IsValid(), "The edge soup is not watertight after `Edit()`.");
         }
-        if (!first)
-            AddEdge({.a = prev, .b = first_point});
-    }
-    template <std::ranges::range R = std::initializer_list<vector>>
-    void AddLoop(R &&range)
+
+        // Inserts a single edge.
+        // Doesn't update `missing_{prev,next}`.
+        EdgeIndex AddEdgeLow(Edge edge, EdgeIndex prev_index = null_edge, EdgeIndex next_index = null_edge)
+        {
+            EdgeWithData edge_with_data;
+            edge_with_data.Edge::operator=(edge);
+            edge_with_data.dense_index = target->dense_edge_indices.ElemCount(); // Sic.
+            edge_with_data.prev = prev_index;
+            edge_with_data.next = next_index;
+            edge_with_data.max_distance_to_origin = MaxEdgeDistanceToOrigin(edge_with_data);
+            auto ret = target->aabb_tree.AddNode(edge.Bounds(), std::move(edge_with_data));
+
+            // `SparseSet` doesn't auto-increase capacity.
+            // Since `AabbTree::AddNode()` already calculates a suitable capacity, we just reuse it here.
+            target->dense_edge_indices.Reserve(target->aabb_tree.Nodes().Capacity());
+            target->dense_edge_indices.Insert(ret);
+
+            return EdgeIndex(ret);
+        }
+
+        // Removes an edge by index, but doesn't touch `prev` and `next` and doesn't update `missing_{prev,next}`.
+        // Raises a debug assertion if no such edge.
+        void RemoveEdgeLow(EdgeIndex edge_index)
+        {
+            [[maybe_unused]] bool ok = target->dense_edge_indices.EraseUnordered(typename AabbTree::NodeIndex(edge_index)); // Sic.
+            ASSERT(ok);
+            ok = target->aabb_tree.RemoveNode(typename AabbTree::NodeIndex(edge_index));
+            ASSERT(ok);
+        }
+
+        // Fills `prev` or `next` (`End == 0` and `1` respectively) in the specified newly created edge.
+        // Updates the `missing_{prev,next}` maps.
+        template <bool Detach, bool End>
+        void AttachOrDetach(EdgeIndex edge_index)
+        {
+            // This edge, as specified in `edge_index`.
+            EdgeWithData &edge = target->GetEdgeMutable(edge_index);
+            // This `End` of the `edge`.
+            const vector point = End ? edge.b : edge.a;
+
+            // The reference to the index of the adjacent edge sharing this `point` (in direction `End`), or `null_edge` if none.
+            EdgeIndex &other_edge_index = (End ? edge.next : edge.prev);
+
+            // The map to add this edge to.
+            auto &self_map = End ? missing_next : missing_prev;
+            // THe map to add the other edge to.
+            auto &other_map = End ? missing_prev : missing_next;
+
+            if constexpr (Detach)
+            {
+                if (other_edge_index == null_edge)
+                {
+                    // No adjacent edge in this direction. Self should be in the map, remove it from there.
+                    auto it = self_map.find(point);
+                    ASSERT(it != self_map.end(), "Internal error: Expected the edge that's being deleted to be the map, since it doesn't have an adjacent one, but it's not there.");
+                    ASSERT(it->second == edge_index, "Internal error: Expected the edge that's being deleted to be the map, since it doesn't have an adjacent one. The map has an entry for this point, but the edge index is wrong.");
+                    self_map.erase(it);
+                }
+                else
+                {
+                    // Have adjacent edge in this direction. Add it to the map.
+                    EdgeWithData &other_edge = target->GetEdgeMutable(other_edge_index);
+                    EdgeIndex &self_edge_index_in_other = (End ? other_edge.prev : other_edge.next);
+                    ASSERT(self_edge_index_in_other == edge_index, "Internal error: While deleting an edge, the adjacent edge doesn't contain the correct index of the edge being deleted.");
+                    self_edge_index_in_other = null_edge;
+                    [[maybe_unused]] bool ok = other_map.try_emplace(point, other_edge_index).second;
+                    ASSERT(ok, "While deleting an edge, the resulting detached point immediately overlapped with an other detached point. This is weird and not supported.");
+                    other_edge_index = null_edge;
+                }
+            }
+            else
+            {
+                ASSERT(other_edge_index == null_edge, "Internal error: This edge is already attached in this direction.");
+
+                auto it = other_map.find(point);
+                if (it != other_map.end())
+                {
+                    // Have something to attach to. Remove other from the map.
+                    other_edge_index = it->second;
+
+                    EdgeWithData &other_edge = target->GetEdgeMutable(other_edge_index);
+                    (End ? other_edge.prev : other_edge.next) = edge_index;
+
+                    other_map.erase(it);
+                }
+                else
+                {
+                    // Don't have anything to attach to, add self to the map.
+                    self_map.try_emplace(point, edge_index);
+                }
+            }
+        }
+
+        // Inserts a sequence of fully initialized edges.
+        // If `Loop`, inserts a final edge to close the loop.
+        template <bool Loop, typename I, typename J>
+        void AddPathLow(I begin, J end)
+        {
+            if (begin == end)
+                return;
+
+            vector first_point = *begin++;
+            vector prev_point = first_point;
+            vector this_point;
+
+            if (begin == end)
+                return;
+
+            bool first = true;
+            EdgeIndex first_edge = null_edge;
+            EdgeIndex last_edge = null_edge;
+
+            do
+            {
+                this_point = *begin++;
+                // The order of the assignment targets is important here.
+                EdgeIndex this_edge = AddEdgeLow({prev_point, this_point}, last_edge, null_edge);
+                if (!first)
+                    target->GetEdgeMutable(last_edge).next = this_edge;
+                last_edge = this_edge;
+                prev_point = this_point;
+
+                if (first)
+                {
+                    first_edge = this_edge;
+                    first = false;
+                }
+            }
+            while (begin != end);
+
+            if constexpr (Loop)
+            {
+                EdgeIndex final_edge = AddEdgeLow({this_point, first_point}, last_edge, first_edge);
+                target->GetEdgeMutable(first_edge).prev = final_edge;
+                target->GetEdgeMutable(last_edge).next = final_edge;
+            }
+            else
+            {
+                AttachOrDetach<false, false>(first_edge);
+                AttachOrDetach<false, true>(last_edge);
+            }
+        }
+
+      public:
+        Editor(const Editor &) = delete;
+        Editor &operator=(const Editor &) = delete;
+
+        // If true, the edges are currently watertight, and finishing now wouldn't produce any errors.
+        [[nodiscard]] bool IsValid() const
+        {
+            return missing_prev.empty() && missing_next.empty();
+        }
+
+        // The total number of edge ends that are not attached yet.
+        // 0 means that we're watertight.
+        [[nodiscard]] std::size_t NumDetachedPoints() const
+        {
+            return missing_prev.size() + missing_next.size();
+        }
+
+        EdgeIndex AddEdge(Edge edge)
+        {
+            EdgeIndex ret = AddEdgeLow(edge);
+            AttachOrDetach<false, false>(ret);
+            AttachOrDetach<false, true>(ret);
+            return ret;
+        }
+
+        void RemoveEdge(EdgeIndex edge_index)
+        {
+            AttachOrDetach<true, false>(edge_index);
+            AttachOrDetach<true, true>(edge_index);
+            RemoveEdgeLow(edge_index);
+        }
+
+        // Add non-closed path.
+        // This can handle closed loops too (if the start and end points overlap), but for those prefer `AddLoop`, which is faster.
+        template <std::ranges::range R = std::initializer_list<vector>>
+        requires std::same_as<std::ranges::range_value_t<R>, vector>
+        void AddPath(R &&range)
+        {
+            AddPathLow<false>(range.begin(), range.end());
+        }
+
+        // Add a closed path.
+        // The final closing edge is inserted automatically.
+        template <std::ranges::range R = std::initializer_list<vector>>
+        requires std::same_as<std::ranges::range_value_t<R>, vector>
+        void AddClosedLoop(R &&range)
+        {
+            AddPathLow<true>(range.begin(), range.end());
+        }
+    };
+
+    // Can be used to edit the shape.
+    // When done, triggers an assertion if the mesh is not watertight.
+    // `func` is `(Editor &e) -> eoid`.
+    template <typename F>
+    void Edit(F &&func)
     {
-        AddLoop(std::ranges::begin(range), std::ranges::end(range));
+        Editor editor;
+        editor.target = this;
+        std::forward<F>(func)(editor);
+        editor.Finish();
     }
 
-    // Removes an edge by index.
-    // Raises a debug assertion if no such edge.
-    void RemoveEdge(EdgeIndex edge_index)
+    // Since this can't generate non-watertight edge soups, we can expose this directly outside of `Edit()`.
+    template <std::ranges::range R = std::initializer_list<vector>>
+    requires std::same_as<std::ranges::range_value_t<R>, vector>
+    void AddClosedLoop(R &&range)
     {
-        [[maybe_unused]] bool ok = dense_edge_indices.EraseUnordered(typename AabbTree::NodeIndex(edge_index)); // Sic.
-        ASSERT(ok);
-        ok = aabb_tree.RemoveNode(typename AabbTree::NodeIndex(edge_index));
-        ASSERT(ok);
+        Edit([&](Editor &e){e.AddClosedLoop(std::forward<R>(range));});
     }
 
     // Get the AABB tree of edges, mostly for debug purposes.

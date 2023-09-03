@@ -115,14 +115,7 @@ struct ContourDemo
 
         if (!unfinished_contour.empty())
         {
-            std::optional<vector> prev;
-            for (vector point : unfinished_contour)
-            {
-                if (prev)
-                    target_shape->AddEdge({.a = *prev, .b = point});
-                prev = point;
-            }
-            target_shape->AddEdge({.a = prev.value(), .b = unfinished_contour.front()});
+            target_shape->AddClosedLoop(unfinished_contour);
 
             std::cout << Refl::ToString(unfinished_contour) << '\n';
 
