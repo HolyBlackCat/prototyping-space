@@ -975,7 +975,20 @@ class EdgeSoup
         return EdgeSoupCollider(*this, other, params);
     }
 
-    // Accumulates `EdgeSoupCollider::CallbackData` objects, and produces a collision summary from them.
+    // Describes collisions between two edge soups.
+    struct CollisionData
+    {
+        struct Segment
+        {
+            vector a, b;
+
+            #error?
+        };
+
+        std::span<Segment> segments;
+    };
+
+    // Accumulates `EdgeSoupCollider::CallbackData` objects, and produces a `CollisionData` from them.
     class CollisionPointsAccumulator
     {
       public:
@@ -1093,7 +1106,7 @@ class EdgeSoup
             new_point.other_enters_self = (data.world_self_edge.b - data.world_self_edge.a) /cross/ (data.world_other_edge.b - data.world_other_edge.a) > 0;
         }
 
-        void Finalize()
+        void Finalize(Storage::MonotonicPool &persistent_pool)
         {
             // Handle non-empty edges.
             for (EdgeIndex edge_index : state.edges_with_points)
@@ -1106,7 +1119,11 @@ class EdgeSoup
                     return a.self_num * b.den < b.self_num * a.den;
                 });
 
-
+                for (std::size_t i = 0; i + 1 < edge_entry.points.size(); i++)
+                {
+                    if (edge_entry.points[i].other_enters_self && !edge_entry.points[i+1].other_enters_self)
+                        // Insert collision
+                }
             }
         }
     };
