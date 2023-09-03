@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <iterator>
 #include <new>
+#include <optional>
 #include <span>
 #include <utility>
 
@@ -21,6 +22,7 @@ IMP_PLATFORM_IF(clang)(
 #include "utils/alignment.h"
 #include "utils/mat.h"
 #include "utils/monotonic_pool.h"
+#include "utils/sparse_set.h"
 
 #define IMP_EDGESOUP_DEBUG(...) // (std::cout << FMT(__VA_ARGS__) << '\n')
 
@@ -36,6 +38,7 @@ class EdgeSoup
   public:
     using scalar = T;
     using vector = vec2<T>;
+    using float_vector = Math::floating_point_t<vector>;
     using matrix = mat2<T>;
     using rect = rect2<T>;
 
@@ -115,6 +118,9 @@ class EdgeSoup
         // Previous and next edges in the loop, or `null_edge` if there are somehow none.
         EdgeIndex prev = null_edge;
         EdgeIndex next = null_edge;
+
+        // The normalized normal.
+        float_vector normal;
 
         // How far the edge is from the local origin. The maximum of the two points' distances is used.
         // For integral `T`s, an upper bound approximation is used.
@@ -230,13 +236,15 @@ class EdgeSoup
 
         // Inserts a single edge.
         // Doesn't update `missing_{prev,next}`.
-        EdgeIndex AddEdgeLow(Edge edge, EdgeIndex prev_index = null_edge, EdgeIndex next_index = null_edge)
+        // If `precalculated_normal` isn't null, uses it instead of computing the normal.
+        EdgeIndex AddEdgeLow(Edge edge, EdgeIndex prev_index, EdgeIndex next_index, std::optional<float_vector> precalculated_normal)
         {
             EdgeWithData edge_with_data;
             edge_with_data.Edge::operator=(edge);
             edge_with_data.dense_index = target->dense_edge_indices.ElemCount(); // Sic.
             edge_with_data.prev = prev_index;
             edge_with_data.next = next_index;
+            edge_with_data.normal = precalculated_normal ? *precalculated_normal : (edge.b - edge.a).rot90(-1).norm();
             edge_with_data.max_distance_to_origin = MaxEdgeDistanceToOrigin(edge_with_data);
             auto ret = target->aabb_tree.AddNode(edge.Bounds(), std::move(edge_with_data));
 
@@ -351,7 +359,7 @@ class EdgeSoup
             {
                 this_point = *begin++;
                 // The order of the assignment targets is important here.
-                EdgeIndex this_edge = AddEdgeLow({prev_point, this_point}, last_edge, null_edge);
+                EdgeIndex this_edge = AddEdgeLow({prev_point, this_point}, last_edge, null_edge, {});
                 if (!first)
                     target->GetEdgeMutable(last_edge).next = this_edge;
                 last_edge = this_edge;
@@ -367,7 +375,7 @@ class EdgeSoup
 
             if constexpr (Loop)
             {
-                EdgeIndex final_edge = AddEdgeLow({this_point, first_point}, last_edge, first_edge);
+                EdgeIndex final_edge = AddEdgeLow({this_point, first_point}, last_edge, first_edge, {});
                 target->GetEdgeMutable(first_edge).prev = final_edge;
                 target->GetEdgeMutable(last_edge).next = final_edge;
             }
@@ -395,9 +403,11 @@ class EdgeSoup
             return missing_prev.size() + missing_next.size();
         }
 
-        EdgeIndex AddEdge(Edge edge)
+        // Adds a single edge.
+        // If `precalculated_normal` isn't null, it's used instead of calcualting the normal. You can use this as an optimization.
+        EdgeIndex AddEdge(Edge edge, std::optional<float_vector> precalculated_normal = {})
         {
-            EdgeIndex ret = AddEdgeLow(edge);
+            EdgeIndex ret = AddEdgeLow(edge, null_edge, null_edge, precalculated_normal);
             AttachOrDetach<false, false>(ret);
             AttachOrDetach<false, true>(ret);
             return ret;
@@ -506,7 +516,7 @@ class EdgeSoup
                 ray_aabb.b[ray_vertical] = bounds.b[ray_vertical];
 
             int counter = 0;
-            target->aabb_tree.CollideAabb(ray_aabb, [&](EdgeIndexToUnderlying edge_index_raw) -> bool
+            target->aabb_tree.CollideAabb(ray_aabb, [&](AabbTree::NodeIndex edge_index_raw) -> bool
             {
                 const Edge &edge = target->GetEdge(EdgeIndex(edge_index_raw));
 
@@ -649,7 +659,7 @@ class EdgeSoup
             }
         }
 
-        return aabb_tree.CollideAabb(other_bounds, [&](EdgeIndexToUnderlying edge_index_raw)
+        return aabb_tree.CollideAabb(other_bounds, [&](AabbTree::NodeIndex edge_index_raw)
         {
             const EdgeIndex edge_index = EdgeIndex(edge_index_raw);
             const EdgeWithData &original_edge = GetEdge(edge_index);
@@ -668,7 +678,7 @@ class EdgeSoup
 
             bool first = true;
 
-            bool stop = other.EdgeTree().CollideAabb(edge_bounds, [&](EdgeIndexToUnderlying other_edge_index)
+            bool stop = other.EdgeTree().CollideAabb(edge_bounds, [&](AabbTree::NodeIndex other_edge_index)
             {
                 if (first)
                 {
@@ -763,13 +773,13 @@ class EdgeSoup
         struct CollisionCandidate
         {
             EdgeIndex edge_index;
-            Edge edge;
+            const EdgeWithData *edge = nullptr;
         };
 
         struct EdgeEntry
         {
             EdgeIndex edge_index;
-            Edge edge;
+            const EdgeWithData *edge = nullptr;
             std::span<CollisionCandidate> collision_candidates;
         };
 
@@ -860,10 +870,10 @@ class EdgeSoup
                     (void)self_transformed_edge;
                     EdgeEntry &edge_entry = edge_entries[num_edge_entries];
                     edge_entry.edge_index = self_edge_index;
-                    edge_entry.edge = self_edge;
+                    edge_entry.edge = &self_edge;
                     edge_entry.collision_candidates = params.persistent_pool->template AllocateArray<CollisionCandidate>(num_temp_other_edges);
                     for (std::size_t i = 0; i < num_temp_other_edges; i++)
-                        edge_entry.collision_candidates[i] = {.edge_index = temp_other_edges[i], .edge = other->GetEdge(temp_other_edges[i])};
+                        edge_entry.collision_candidates[i] = {.edge_index = temp_other_edges[i], .edge = &other->GetEdge(temp_other_edges[i])};
                     num_edge_entries++;
                     num_temp_other_edges = 0;
                     return false;
@@ -878,12 +888,12 @@ class EdgeSoup
         {
             // Self edge.
             EdgeIndex self_edge_index;
-            const Edge &self_edge; // In self coords.
+            const EdgeWithData &self_edge; // In self coords.
             const Edge &world_self_edge; // In world coords.
 
             // Other edge.
             EdgeIndex other_edge_index;
-            const Edge &other_edge; // In other coords.
+            const EdgeWithData &other_edge; // In other coords.
             const Edge &world_other_edge; // In world coords.
 
             // The relative intersection position on the edges, like in `Edge::CollideWithEdgeInclusive()`.
@@ -921,7 +931,7 @@ class EdgeSoup
             {
                 IMP_EDGESOUP_DEBUG("edge {}", EdgeIndexToUnderlying(entry.edge_index));
 
-                Edge world_self_edge = entry.edge;
+                Edge world_self_edge = *entry.edge;
                 world_self_edge.a = self_pos + self_rot * world_self_edge.a;
                 world_self_edge.b = self_pos + self_rot * world_self_edge.b;
                 IMP_EDGESOUP_DEBUG("{}-{} -> {}-{}", entry.edge.a, entry.edge.b, world_self_edge.a, world_self_edge.b);
@@ -930,7 +940,7 @@ class EdgeSoup
                 {
                     IMP_EDGESOUP_DEBUG("  candidate {}", EdgeIndexToUnderlying(candidate.edge_index));
 
-                    Edge world_other_edge = candidate.edge;
+                    Edge world_other_edge = *candidate.edge;
                     world_other_edge.a = other_pos + other_rot * world_other_edge.a;
                     world_other_edge.b = other_pos + other_rot * world_other_edge.b;
                     IMP_EDGESOUP_DEBUG("{}-{} -> {}-{}", candidate.edge.a, candidate.edge.b, world_other_edge.a, world_other_edge.b);
@@ -946,10 +956,10 @@ class EdgeSoup
                         {
                             if (func(CallbackData{
                                 .self_edge_index  = entry.edge_index,
-                                .self_edge        = entry.edge,
+                                .self_edge        = *entry.edge,
                                 .world_self_edge  = world_self_edge,
                                 .other_edge_index = candidate.edge_index,
-                                .other_edge       = candidate.edge,
+                                .other_edge       = *candidate.edge,
                                 .world_other_edge = world_other_edge,
                                 .num_self         = num_self,
                                 .num_other        = num_other,
@@ -980,9 +990,14 @@ class EdgeSoup
     {
         struct Segment
         {
-            vector a, b;
+            // The world positions of the start and end of the segment.
+            vector world_a, world_b;
 
-            #error?
+            // The primary normal, normalized.
+            float_vector primary_normal;
+
+            // Two extra optional normals limiting the movement, attached to points `a` and `b` respectively.
+            std::optional<vector> extra_normal_a, extra_normal_b;
         };
 
         std::span<Segment> segments;
@@ -994,14 +1009,17 @@ class EdgeSoup
       public:
         struct Params
         {
-            // This needs to stay alive as long as the object is used.
-            // Which isn't that long, since it's not needed after `Finalize()`.
+            // This needs to stay alive as long as the object is used (until you call `Finalize()`).
             Storage::MonotonicPool *temp_pool = nullptr;
+
+            // Rotation matrices for self and other.
+            matrix self_rot;
+            matrix other_rot;
 
             // The starting capacity of point lists in edges.
             // This is used when the first point is inserted, before that the capacity is zero.
             std::size_t edge_points_capacity_initial = 4;
-            // When a point list of an edge runs out of capacity (and it's already positive),
+            // When a point list of an  edge runs out of capacity (and it's already positive),
             // the capacity is multiplied by this number.
             std::size_t edge_points_capacity_factor = 2;
         };
@@ -1012,20 +1030,79 @@ class EdgeSoup
             // If false, the other edge exits the self shape, while the self edge enters the other shape.
             bool other_enters_self = false;
 
-            // The relative position of the point on the self edge, as a fraction.
-            scalar self_num = 0;
+            // The other edge. The self edge is implied by where the point is stored.
+            EdgeIndex other_edge_index = null_edge;
+            // The normal of the other edge.
+            float_vector other_normal;
+
+            // The second edge and normal, if two points on the other overlap. Optional.
+            EdgeIndex other_edge_index_2 = null_edge;
+            float_vector other_normal_2;
+
+            // The second self edge index, if two points on the self overlap. Optional.
+            EdgeIndex self_edge_index_2 = null_edge;
+
+            // The fractional position on the self edge.
+            scalar num_self = 0;
             scalar den = 1;
+
+            // The world positition of this point.
+            vector world_pos;
+
+            // Whether `other` should be merged with this point, ignoring its position (possibly because it's on a different edge).
+            [[nodiscard]] bool ShouldMergeWithIgnoringPosition(const PointDesc &other) const
+            {
+                return other_enters_self == other.other_enters_self;
+            }
+            // Whether `other` (which must be on the same edge) should be merged with this point.
+            [[nodiscard]] bool ShouldMergeWithOnSameEdge(const PointDesc &other) const
+            {
+                return ShouldMergeWithIgnoringPosition(other) && num_self * other.den == other.num_self * den;
+            }
+
+            // Merge with a different point.
+            // `merged_different_self_edge_index` can contain a different self edge index, if `other` is on a different self edge.
+            // `other` is the target point. Nothing should've been merged into it before.
+            void MergeWith(EdgeIndex merged_different_self_edge_index, const PointDesc &other)
+            {
+                // Make sure nothing was merged into `other` before.
+                ASSERT(other.other_edge_index_2 == null_edge && other.self_edge_index_2 == null_edge);
+
+                // Overlap on self.
+                if (merged_different_self_edge_index != null_edge)
+                {
+                    ASSERT((self_edge_index_2 != null_edge) <= (self_edge_index_2 == merged_different_self_edge_index),
+                        "While merging points: Three different self edges appear to share a point. Expected at most two.");
+
+                    self_edge_index_2 = merged_different_self_edge_index;
+                }
+
+                // Overlap on other.
+                // If it's a different other edge...
+                if (other.other_edge_index != other_edge_index)
+                {
+                    ASSERT((other_edge_index_2 != null_edge) <= (other_edge_index_2 == other.other_edge_index),
+                        "While merging points: Three different other edges appear to share a point. Expected at most two.");
+
+                    other_edge_index_2 = other.other_edge_index;
+                    other_normal_2 = other.other_normal;
+                }
+            }
         };
 
         struct EdgeEntry
         {
+            // Those are sorted by the position on the edge.
             std::span<PointDesc> points;
             // The number of objects we can store at `points.data()`.
             std::size_t points_capacity = 0;
 
+            // The normalized normal, in the world coordinates.
+            float_vector normal;
+
             // The indices of the first and last collision groups.
-            int first_collision = -1;
-            int last_collision = -1;
+            bool need_point_before = false;
+            bool need_point_after = false;
         };
 
       private:
@@ -1034,14 +1111,20 @@ class EdgeSoup
             const EdgeSoup *self = nullptr;
             Params params;
 
+            // Information about each edge.
             // This is sparse, use self `EdgeIndex` as indices.
             std::span<EdgeEntry> edge_entries;
             // This lists all edges with at least one point.
             std::span<EdgeIndex> edges_with_points;
+
+            // The number of collision points.
+            int total_num_points = 0;
         };
         State state;
 
       public:
+        CollisionPointsAccumulator() {}
+
         CollisionPointsAccumulator(const EdgeSoup &self, Params params)
         {
             state.self = &self;
@@ -1072,6 +1155,8 @@ class EdgeSoup
         // Note, the collider must use the same object as 'self' as was passed to the constructor.
         void AddPoint(const EdgeSoupCollider::CallbackData &data)
         {
+            state.total_num_points++;
+
             EdgeEntry &edge_entry = state.edge_entries[EdgeIndexToUnderlying(data.self_edge_index)];
 
             // Check that we have enough capacity in the point list.
@@ -1086,6 +1171,8 @@ class EdgeSoup
                     // This shouldn't overflow.
                     state.edges_with_points.data()[state.edges_with_points.size()] = data.self_edge_index;
                     state.edges_with_points = {state.edges_with_points.data(), state.edges_with_points.size() + 1};
+
+                    edge_entry.normal = state.params.self_rot * data.self_edge.normal;
                 }
                 else
                 {
@@ -1101,30 +1188,163 @@ class EdgeSoup
             PointDesc &new_point = edge_entry.points.data()[edge_entry.points.size()];
             edge_entry.points = {edge_entry.points.data(), edge_entry.points.size() + 1};
 
-            new_point.self_num = data.num_self;
+            new_point.num_self = data.num_self;
             new_point.den = data.den;
+            new_point.world_pos = data.world_self_edge.Point(data.num_self, data.den);
             new_point.other_enters_self = (data.world_self_edge.b - data.world_self_edge.a) /cross/ (data.world_other_edge.b - data.world_other_edge.a) > 0;
+            new_point.other_edge_index = data.other_edge_index;
+            new_point.other_normal = data.other_edge.normal;
         }
 
-        void Finalize(Storage::MonotonicPool &persistent_pool)
+        // Normally this happens as a part of `Finalize()`. Calling this manually doesn't make much sense.
+        // Tries to remove duplicate points, and fills the `..._2` fields in the merged points.
+        void OnlyDeduplicatePoints()
         {
-            // Handle non-empty edges.
+            // Deduplicate points inside the same edge.
             for (EdgeIndex edge_index : state.edges_with_points)
             {
                 EdgeEntry &edge_entry = state.edge_entries[EdgeIndexToUnderlying(edge_index)];
 
-                // Sort points by fraction `self_num/den`.
-                std::sort(edge_entry.points.begin(), edge_entry.points.end(), [](const PointDesc &a, const PointDesc &b)
+                if (!edge_entry.points.empty())
                 {
-                    return a.self_num * b.den < b.self_num * a.den;
-                });
+                    // Sort the points by the position on the edge.
+                    // Resolve the ties so that `.other_enters_self == true` points go first.
+                    std::sort(edge_entry.points.begin(), edge_entry.points.end(), [](const PointDesc &a, const PointDesc &b)
+                    {
+                        if (auto d = a.num_self * b.den - b.num_self * a.den)
+                            return d < 0;
+                        if (auto d = a.other_enters_self - b.other_enters_self)
+                            return d > 0;
+                        return false;
+                    });
 
-                for (std::size_t i = 0; i + 1 < edge_entry.points.size(); i++)
+                    // Deduplicate overlapping points.
+                    std::size_t source_index = 0;
+                    std::size_t num_resulting_points = 0;
+
+                    PointDesc *last_target_point = nullptr;
+
+                    while (source_index < edge_entry.points.size())
+                    {
+                        const PointDesc &source_point = edge_entry.points[source_index];
+
+                        if (last_target_point && last_target_point->ShouldMergeWithOnSameEdge(source_point))
+                        {
+                            last_target_point->MergeWith(null_edge, source_point);
+                        }
+                        else
+                        {
+                            last_target_point = &(edge_entry.points[num_resulting_points++] = source_point);
+                        }
+
+                        source_index++;
+                    }
+
+                    edge_entry.points = edge_entry.points.first(num_resulting_points);
+                }
+            }
+
+            // Deduplicate points between the edges.
+            for (EdgeIndex edge_index : state.edges_with_points)
+            {
+                EdgeEntry &edge_entry = state.edge_entries[EdgeIndexToUnderlying(edge_index)];
+
+                if (!edge_entry.points.empty())
                 {
-                    if (edge_entry.points[i].other_enters_self && !edge_entry.points[i+1].other_enters_self)
-                        // Insert collision
+                    EdgeIndex prev_edge_index = state.self->GetEdge(edge_index).prev;
+                    EdgeEntry &prev_edge_entry = state.edge_entries[EdgeIndexToUnderlying(prev_edge_index)];
+
+                    if (!prev_edge_entry.points.empty())
+                    {
+                        PointDesc &this_point = edge_entry.points.front();
+                        PointDesc &prev_point = prev_edge_entry.points.back();
+
+                        if (this_point.ShouldMergeWithIgnoringPosition(prev_point)
+                            && this_point.num_self == 0 && prev_point.num_self == prev_point.den)
+                        {
+                            this_point.MergeWith(prev_edge_index, prev_point);
+                            prev_edge_entry.points = prev_edge_entry.points.first(prev_edge_entry.points.size() - 1);
+                        }
+                    }
                 }
             }
         }
+
+        // [[nodiscard]] CollisionData Finalize(Storage::MonotonicPool &persistent_pool)
+        // {
+        //     OnlyDeduplicatePoints();
+
+        //     CollisionData ret;
+        //     const int max_num_collisions = state.total_num_points / 2;
+        //     ret.segments = {persistent_pool.AllocateArray<CollisionData::Segment>(max_num_collisions).data(), 0};
+
+        //     // Those contain `EdgeIndex`es of edges with lone points at the end or at the beginning respectively.
+        //     SparseSetNonOwning<int> lone_begin_points = persistent_pool.AllocateArray<int>(state.self->NumSparseEdges() * 2); // Note, need x2 storage for a sparse set.
+        //     SparseSetNonOwning<int> lone_end_points   = persistent_pool.AllocateArray<int>(state.self->NumSparseEdges() * 2);
+
+        //     // Creates a new collision and returns the index.
+        //     // If `precalculated_normal` is not null, it's used as the normal (as an optimization). Otherwise it's calculated from the points.
+        //     auto AddNewCollision = [&](const PointDesc &a, const PointDesc &b, const vector *precalculated_normal) -> int
+        //     {
+        //         int index = int(ret.segments.size());
+        //         ASSERT(index < max_num_collisions);
+        //         ret.segments = {ret.segments.data(), ret.segments.size() + 1};
+
+        //         typename CollisionData::Segment &seg = ret.segments.back();
+
+        //         seg.a = a.world_pos;
+        //         seg.b = b.world_pos;
+        //         seg.primary_normal = precalculated_normal ? *precalculated_normal : (seg.b - seg.a).rot90(-1).norm();
+
+        //         return index;
+        //     };
+        //     // Modifies a collision to take an extra point into the account.
+        //     // If `after == true`, the point comes after the segment. Otherwise it comes before.
+        //     auto AddExtraPointToCollision = [](CollisionData::Segment &seg, bool after, const PointDesc &point)
+        //     {
+        //         auto &target_normal = after ? seg.extra_normal_b : seg.extra_normal_a;
+
+        //         if (point.)
+        //     };
+        //             // Handle unfinished collisions on the edges.
+        //             if (!edge_entry.points.front().other_enters_self)
+        //             {
+        //                 edge_entry.need_point_before = true;
+        //                 lone_end_points.Insert(EdgeIndexToUnderlying(edge_index));
+        //             }
+        //             if (edge_entry.points.back().other_enters_self)
+        //             {
+        //                 edge_entry.need_point_after = true;
+        //                 lone_begin_points.Insert(EdgeIndexToUnderlying(edge_index));
+        //             }
+
+        //             // Handle collisions that are entirely on this edge.
+        //             for (std::size_t i = 0; i + 1 < edge_entry.points.size(); i++)
+        //             {
+        //                 if (edge_entry.points[i].other_enters_self && !edge_entry.points[i+1].other_enters_self)
+        //                 {
+        //                     // Create the collision.
+        //                     int col_index = AddNewCollision(edge_entry.points[i], edge_entry.points[i+1], &edge_entry.world_normal);
+
+        //                     // Will change `i` by this amount on top of the normal increment.
+        //                     int shift = 1;
+
+        //                     // Extra point before.
+        //                     if (i > 0 && edge_entry.points[i-1].other_enters_self)
+        //                     {
+        //                         AddExtraPointToCollision(ret.segments[col_index], false, edge_entry.points[i-1]);
+        //                         shift++;
+        //                     }
+        //                     // Extra point after.
+        //                     if (i + 2 < edge_entry.points.size() && !edge_entry.points[i+2].other_enters_self)
+        //                     {
+        //                         AddExtraPointToCollision(ret.segments[col_index], true, edge_entry.points[i+2]);
+        //                         shift++;
+        //                     }
+
+        //                     i += shift;
+        //                 }
+        //             }
+        // }
     };
 };

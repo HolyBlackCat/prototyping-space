@@ -266,7 +266,7 @@ struct ContourDemo
                     .other_angular_vel_abs_upper_bound = 0,
                 });
                 Shape::CollisionPointsAccumulator accum(shape, Shape::CollisionPointsAccumulator::Params{
-                    .persistent_pool = &persistent_pool,
+                    .temp_pool = &temp_pool,
                 });
                 collider.Collide(self_pos, self_matrix, other_pos, other_matrix, [&](Shape::EdgeSoupCollider::CallbackData data) -> bool
                 {
@@ -277,7 +277,7 @@ struct ContourDemo
                 for (auto edge_index : accum.GetEdgesWithPoints())
                 for (const auto &point : accum.GetEdgeEntry(edge_index).points)
                 {
-                    r.iquad(iround(self_pos + self_matrix * shape.GetEdge(edge_index).Point(point.self_num, point.den)), ivec2(5)).center().color(point.other_enters_self ? fvec3(0,1,0) : fvec3(1,0,0)).alpha(0.5f);
+                    r.iquad(iround(self_pos + self_matrix * shape.GetEdge(edge_index).Point(point.num_self, point.den)), ivec2(5)).center().color(point.other_enters_self ? fvec3(0,1,0) : fvec3(1,0,0)).alpha(0.5f);
                 }
             }
         }

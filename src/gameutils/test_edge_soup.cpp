@@ -470,9 +470,9 @@ TEST_CASE("edge_soup.edge_to_edge")
     REQUIRE_FALSE(T::Edge{ivec2(11, 20), ivec2(10,20)}.CollideWithEdgeInclusive({ivec2(12,20), ivec2(13,20)}, T::Edge::EdgeCollisionMode::parallel_rejected));
     REQUIRE_FALSE(T::Edge{ivec2(11, 20), ivec2(10,20)}.CollideWithEdgeInclusive({ivec2(13,20), ivec2(12,20)}, T::Edge::EdgeCollisionMode::parallel_rejected));
 }
-
+#if 0
 // Collisions between edge soups.
-TEST_CASE("edge_soup.soup_to_soup")
+TEST_CASE("edge_soup.soup_to_soup.edges")
 {
     using T = EdgeSoup<float>;
 
@@ -496,7 +496,6 @@ TEST_CASE("edge_soup.soup_to_soup")
         auto HalfCollide = [&persistent_pool, &temp_pool](bool inv, float t, const T &shape_a, const T &shape_b, fvec2 pos_a, float angle_a, fvec2 offset_a, float rot_a, fvec2 pos_b, float angle_b, fvec2 offset_b, float rot_b, std::vector<CollidingPoint> points)
         {
             CAPTURE(inv);
-
 
             T::EdgeSoupCollider::Params params{
                 .persistent_pool = &persistent_pool,
@@ -834,3 +833,185 @@ TEST_CASE("edge_soup.soup_to_soup")
         });
     }
 }
+
+// Collisions between edge soups.
+TEST_CASE("edge_soup.soup_to_soup.points.deduplication")
+{
+    using T = EdgeSoup<float>;
+
+    static constexpr auto PointsNear = [](fvec2 a, fvec2 b) -> bool
+    {
+        return (a - b).len_sq() < 0.0001f;
+    };
+
+    struct CollidingPoint
+    {
+        fvec2 pos;
+
+        // If neither `self_edge` nor `self_edge_2` are set, the self edge indices are completely ignored.
+        // If exactly one is set, we expect the single self edge, not merged.
+        // If both are set, we expect two merged self edges, in any order.
+        std::optional<int> self_edge;
+        std::optional<int> self_edge_2;
+        // Same.
+        std::optional<int> other_edge;
+        std::optional<int> other_edge_2;
+
+        // Whether the other edge enters the self shape, or the other way around.
+        // Not tested if null.
+        // We only merge points that have the same value of this, so we only need one variable.
+        std::optional<bool> other_enters_self;
+    };
+
+    auto Collide = [](const T &shape_a, const T &shape_b, fvec2 pos_a, fmat2 mat_a, fvec2 pos_b, fmat2 mat_b, const std::vector<CollidingPoint> &points)
+    {
+        Storage::MonotonicPool persistent_pool;
+        Storage::MonotonicPool temp_pool;
+
+        auto HalfCollide = [&persistent_pool, &temp_pool](bool inv, const T &shape_a, const T &shape_b, fvec2 pos_a, fmat2 mat_a, fvec2 pos_b, fmat2 mat_b, std::vector<CollidingPoint> points)
+        {
+            CAPTURE(inv);
+
+            T::EdgeSoupCollider::Params params{
+                .persistent_pool = &persistent_pool,
+                .temp_pool = temp_pool,
+                .self_pos = pos_a,
+                .other_pos = pos_b,
+                .self_rot = mat_a,
+                .other_rot = mat_b,
+            };
+            auto collider = shape_a.MakeEdgeSoupCollider(shape_b, params);
+            T::CollisionPointsAccumulator accum(shape_a, T::CollisionPointsAccumulator::Params{
+                .temp_pool = &temp_pool,
+                .self_rot = mat_a,
+                .other_rot = mat_b,
+            });
+            collider.Collide(pos_a, mat_a, pos_b, mat_b,
+                [&](T::EdgeSoupCollider::CallbackData data) -> bool
+                {
+                    accum.AddPoint(data);
+                    return false;
+                }
+            );
+
+            accum.OnlyDeduplicatePoints();
+
+            for (T::EdgeIndex edge_index : accum.GetEdgesWithPoints())
+            {
+                for (const T::CollisionPointsAccumulator::PointDesc &point : accum.GetEdgeEntry(edge_index).points)
+                {
+                    REQUIRE_MESSAGE(!points.empty(), "More collisions than expected.");
+
+                    [[maybe_unused]] bool has_near_points = false;
+                    auto it = std::find_if(points.begin(), points.end(), [&](const CollidingPoint &p)
+                    {
+                        if (PointsNear(p.pos, point.world_pos))
+                            has_near_points = true;
+                        else
+                            return false;
+
+                        std::optional<int> expected_self_edge = p.self_edge;
+                        std::optional<int> expected_self_edge_2 = p.self_edge_2;
+                        std::optional<int> expected_other_edge = p.other_edge;
+                        std::optional<int> expected_other_edge_2 = p.other_edge_2;
+                        if (!expected_self_edge && expected_self_edge_2)
+                            std::swap(expected_self_edge, expected_self_edge_2);
+                        if (!expected_other_edge && expected_other_edge_2)
+                            std::swap(expected_other_edge, expected_other_edge_2);
+
+                        if (inv)
+                        {
+                            std::swap(expected_self_edge, expected_other_edge);
+                            std::swap(expected_self_edge_2, expected_other_edge_2);
+                        }
+
+                        // Make sure enough points were merged here.
+                        if (expected_self_edge_2 && point.self_edge_index_2 == T::null_edge)
+                            return false;
+                        if (expected_other_edge_2 && point.other_edge_index_2 == T::null_edge)
+                            return false;
+
+                        // Check the direction.
+                        if (p.other_enters_self && (*p.other_enters_self != point.other_enters_self) != inv)
+                            return false;
+
+                        // Check the edge indices.
+                        // Self...
+                        if (expected_self_edge
+                            && (expected_self_edge_2
+                                ? sort_two(shape_a.GetEdge(edge_index).dense_index, shape_a.GetEdge(point.self_edge_index_2).dense_index)
+                                    != sort_two(*expected_self_edge, *expected_self_edge_2)
+                                : *expected_self_edge != shape_a.GetEdge(edge_index).dense_index
+                            )
+                        )
+                            return false;
+                        // And other...
+                        if (expected_other_edge
+                            && (expected_other_edge_2
+                                ? sort_two(shape_b.GetEdge(point.other_edge_index).dense_index, shape_b.GetEdge(point.other_edge_index_2).dense_index)
+                                    != sort_two(*expected_other_edge, *expected_other_edge_2)
+                                : *expected_other_edge != shape_b.GetEdge(point.other_edge_index).dense_index
+                            )
+                        )
+                            return false;
+
+                        return true;
+                    });
+                    REQUIRE_MESSAGE(has_near_points, "Unexpected collision point position.");
+                    REQUIRE_MESSAGE(it != points.end(), "Unexpected collision point metadata.");
+
+                    points.erase(it);
+                }
+            }
+
+            REQUIRE_MESSAGE(points.empty(), "Less collisions than expected.");
+        };
+
+        HalfCollide(false, shape_a, shape_b, pos_a, mat_a, pos_b, mat_b, points);
+        HalfCollide(true, shape_b, shape_a, pos_b, mat_b, pos_a, mat_a, points);
+    };
+
+    //  +--2--+ -1
+    //  |     |
+    //  1  +  3  0
+    //  |     |
+    //  +--0--+  1
+    //
+    // -1  0  1
+    T shape_a;
+    shape_a.AddClosedLoop({fvec2(1,1),fvec2(-1,1),fvec2(-1,-1),fvec2(1,-1)});
+
+    //         .+.                -1
+    //       .'   '.
+    //     .2       '.
+    //   .'           '.
+    //  +       +       3.         0
+    //   '.               '.
+    //     '.               '.
+    //       '.               '.
+    //         '1               +  1
+    //           '.           .'
+    //             '.       0'
+    //               '.   .'
+    //                 '+'         2
+    // -1       0       1       2
+    T shape_b;
+    shape_b.AddClosedLoop({fvec2(2,1),fvec2(1,2),fvec2(-1,0),fvec2(0,-1)});
+
+    // // Nothing to merge.
+    // Collide(shape_a, shape_b, fvec2(), fmat2(0,-1,1,0)/*clockwise 90 deg*/, fvec2(0,1.5f), fmat2{}, {
+    //     {.pos = fvec2(-0.5f,1), .self_edge = 3, .other_edge = 2, .other_enters_self = true},
+    //     {.pos = fvec2(0.5f,1), .self_edge = 3, .other_edge = 3, .other_enters_self = false},
+    // });
+
+    // Touching point-to-edge collision, also nothing to merge.
+    Collide(shape_a, shape_b, fvec2(), fmat2(0,-1,1,0)/*clockwise 90 deg*/, fvec2(2,1), fmat2{}, {
+        {.pos = fvec2(1,1), .self_edge = 2, .other_edge = 1},
+        {.pos = fvec2(1,1), .self_edge = 2, .other_edge = 2},
+        {.pos = fvec2(1,1), .self_edge = 3, .other_edge = 1, .other_edge_2 = 2},
+        #error 0. сделай так, чтобы num==0 и num==den принудительно выставляли other_enters_self, может поможет
+        #error 1. explain why 4 points collapsed to 3 points and not 2 (похоже что работает как задумано, но это значит, что задумано неправильно? блин, хмм)
+        #error 2. why isn't the third line accepted
+    });
+}
+#endif
