@@ -35,6 +35,10 @@ struct ContourDemo
     Shape shape;
     std::vector<ivec2> unfinished_contour;
 
+    Shape other_shape;
+    ivec2 other_pos;
+    imat2 other_matrix;
+
     void DrawLine(fvec2 a, fvec2 b, fvec3 color, float alpha = 1) const
     {
         r.fquad(a, fvec2((b - a).len(), 1)).center(fvec2(0,0.5f)).color(color).alpha(alpha).rotate((b - a).angle());
@@ -46,18 +50,21 @@ struct ContourDemo
         DrawLine(center, center + (b - a).rot90(-1).norm() * 8, color, alpha);
     }
 
-    void AddUnfinishedContourToShape()
+    void AddUnfinishedContourToShape(Shape *target_shape = nullptr)
     {
+        if (!target_shape)
+            target_shape = &shape;
+
         if (!unfinished_contour.empty())
         {
             std::optional<ivec2> prev;
             for (ivec2 point : unfinished_contour)
             {
                 if (prev)
-                    shape.AddEdge({.a = *prev, .b = point});
+                    target_shape->AddEdge({.a = *prev, .b = point});
                 prev = point;
             }
-            shape.AddEdge({.a = prev.value(), .b = unfinished_contour.front()});
+            target_shape->AddEdge({.a = prev.value(), .b = unfinished_contour.front()});
 
             std::cout << Refl::ToString(unfinished_contour) << '\n';
 
@@ -73,22 +80,14 @@ struct ContourDemo
         // Refl::FromString(unfinished_contour, "[(-60,-50),(-11,-68),(41,-48),(58,6),(37,51),(-15,67),(-63,49),(-85,0)]");
         // overhangs
         // Refl::FromString(unfinished_contour, "[(-26,-121),(12,-46),(-9,-40),(10,-6),(-11,-6),(9,28),(-8,23),(7,56),(-6,56),(-17,31),(-34,119),(-100,128),(-102,-128)]");
+        // hook
+        // Refl::FromString(unfinished_contour, "[(-67,31),(-67,14),(-34,25),(-8,10),(-8,-37),(-17,-49),(1,-38),(10,20),(-27,48)]");
 
-        shape.AddLoop(std::array{
-            ivec2( 6, 0)*10,
-            ivec2(12, 6)*10,
-            ivec2( 6,12)*10,
-            ivec2( 0, 6)*10,
-        });
-        // Hole:
-        shape.AddLoop(std::array{
-            ivec2( 2, 6)*10,
-            ivec2( 6,10)*10,
-            ivec2(10, 6)*10,
-            ivec2( 6, 2)*10,
-        });
-
+        // Refl::FromString(unfinished_contour, "[(56,-49),(-1,-59),(-10,-12),(44,-4),(58,21),(-35,6),(-21,-81),(70,-65)]"); // flipped C
         AddUnfinishedContourToShape();
+
+        // Refl::FromString(unfinished_contour, "[(-67,31),(-67,14),(-34,25),(-8,10),(-8,-37),(-17,-49),(1,-38),(10,20),(-27,48)]"); // hook
+        AddUnfinishedContourToShape(&other_shape);
     }
 
     void Tick()
@@ -98,6 +97,9 @@ struct ContourDemo
 
         if (mouse.right.pressed())
             AddUnfinishedContourToShape();
+
+        other_pos = mouse.pos();
+        other_matrix = imat2(0,-1,-1,0);
     }
 
     void Render() const
@@ -109,11 +111,12 @@ struct ContourDemo
             bool collides = false;
             if (unfinished_contour.empty())
             {
-                // auto collider = shape.MakeCollider(mouse.pos());
-                auto collider = shape.MakeCollider(ivec2(0));
-                collides = collider.CollidePoint(mouse.pos());
+                // // Point collision.
+                // auto collider = shape.MakePointCollider(ivec2(0));
+                // collides = collider.CollidePoint(mouse.pos());
+                // r.fquad(mouse.pos() + 0.5f, fvec2(32, 1)).center(fvec2(0.5f)).rotate(collider.DebugRayDirection() * f_pi / 2).color(fvec3(0,0,1));
 
-                r.fquad(mouse.pos() + 0.5f, fvec2(32, 1)).center(fvec2(0.5f)).rotate(collider.DebugRayDirection() * f_pi / 2).color(fvec3(0,0,1));
+                collides = other_shape.CollideEdgeSoupSimple(shape, other_pos, other_matrix);
             }
 
             r.fquad(shape.Bounds()).color(fvec3(1,1,1)).alpha(0.1f);
@@ -122,6 +125,22 @@ struct ContourDemo
             {
                 const auto &edge = shape.EdgeTree().GetNodeUserData(e);
                 DrawLineWithNormal(edge.a, edge.b, collides ? fvec3(1,0,1) : fvec3(1,1,1));
+                for (int i = 0; i < 4; i++)
+                    r.itext((edge.a + edge.b) / 2 + ivec2::dir4(i), Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(0,0,0));
+                r.itext((edge.a + edge.b) / 2, Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(1,1,1));
+                return false;
+            });
+        }
+
+        { // Other shape.
+            other_shape.EdgeTree().CollideCustom([&](auto &&){return true;}, [&](Shape::EdgeIndex e)
+            {
+                auto edge = other_shape.EdgeTree().GetNodeUserData(e);
+                edge.a = other_matrix * edge.a;
+                edge.b = other_matrix * edge.b;
+                edge.a += other_pos;
+                edge.b += other_pos;
+                DrawLineWithNormal(edge.a, edge.b, fvec3(0,0.5f,1));
                 for (int i = 0; i < 4; i++)
                     r.itext((edge.a + edge.b) / 2 + ivec2::dir4(i), Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(0,0,0));
                 r.itext((edge.a + edge.b) / 2, Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(1,1,1));

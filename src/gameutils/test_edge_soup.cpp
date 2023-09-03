@@ -12,7 +12,7 @@ TEST_CASE("edge_soup.basic")
         do \
         { \
             [[maybe_unused]] auto point = point_; \
-            [[maybe_unused]] auto col = c_.MakeCollider(point_); \
+            [[maybe_unused]] auto col = c_.MakePointCollider(point_); \
             REQUIRE(std::set<int>{__VA_ARGS__}.contains(col.DebugRayDirection())); \
             REQUIRE_EQ(col.CollidePoint(point), result_); \
         } \
@@ -98,7 +98,7 @@ TEST_CASE("edge_soup.pixelperfect.basic")
         std::string str;
         for (ivec2 pos : corner_a <= vector_range <= corner_b)
         {
-            str += ".#"[c.MakeColliderWithRayDir(ray_dir).CollidePoint(pos)];
+            str += ".#"[c.MakePointColliderWithRayDir(ray_dir).CollidePoint(pos)];
             if (pos.x == corner_b.x)
                 str += '\n';
         }
@@ -159,7 +159,7 @@ TEST_CASE("edge_soup.pixelperfect.axis_aligned")
         std::string str;
         for (ivec2 pos : corner_a <= vector_range <= corner_b)
         {
-            str += ".#"[c.MakeColliderWithRayDir(ray_dir).CollidePoint(pos)];
+            str += ".#"[c.MakePointColliderWithRayDir(ray_dir).CollidePoint(pos)];
             if (pos.x == corner_b.x)
                 str += '\n';
         }
@@ -213,7 +213,7 @@ TEST_CASE("edge_soup.overhands")
         std::string str;
         for (ivec2 pos : corner_a <= vector_range <= corner_b)
         {
-            str += ".#"[c.MakeColliderWithRayDir(ray_dir).CollidePoint(pos)];
+            str += ".#"[c.MakePointColliderWithRayDir(ray_dir).CollidePoint(pos)];
             if (pos.x == corner_b.x)
                 str += '\n';
         }
