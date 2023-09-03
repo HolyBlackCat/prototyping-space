@@ -1,19 +1,25 @@
-#include "main.h"
+#include "gameutils/contour.h"
 
 const ivec2 screen_size = ivec2(480, 270);
-const std::string_view window_name = "Iota";
+const std::string_view window_name = "2D contours";
 
 Interface::Window window(std::string(window_name), screen_size * 2, Interface::windowed, adjust_(Interface::WindowSettings{}, .min_size = screen_size));
 static Graphics::DummyVertexArray dummy_vao = nullptr;
 
 Audio::Context audio_context = nullptr;
-Audio::SourceManager audio;
+Audio::SourceManager audio_controller;
 
 const Graphics::ShaderConfig shader_config = Graphics::ShaderConfig::Core();
 Interface::ImGuiController gui_controller(Poly::derived<Interface::ImGuiController::GraphicsBackend_Modern>, adjust_(Interface::ImGuiController::Config{}, .shader_header = shader_config.common_header, .store_state_in_file = {}));
 
-Graphics::FontFile Fonts::Files::main(Program::ExeDir() + "assets/Monocat_6x12.ttf", 12);
-Graphics::Font Fonts::main;
+namespace Fonts
+{
+    namespace Files
+    {
+        Graphics::FontFile main(Program::ExeDir() + "assets/Monocat_6x12.ttf", 12);
+    }
+    Graphics::Font main;
+}
 
 GameUtils::AdaptiveViewport adaptive_viewport(shader_config, screen_size);
 Render r = adjust_(Render(0x2000, shader_config), .SetMatrix(adaptive_viewport.GetDetails().MatrixCentered()));
@@ -23,10 +29,113 @@ Input::Mouse mouse;
 Random::DefaultGenerator random_generator = Random::MakeGeneratorFromRandomDevice();
 Random::DefaultInterfaces<Random::DefaultGenerator> ra(random_generator);
 
+struct ContourDemo
+{
+    using Shape = ContourShape<int>;
+    Shape shape;
+    std::vector<ivec2> unfinished_contour;
+
+    void DrawLine(fvec2 a, fvec2 b, fvec3 color, float alpha = 1) const
+    {
+        r.fquad(a, fvec2((b - a).len(), 1)).center(fvec2(0,0.5f)).color(color).alpha(alpha).rotate((b - a).angle());
+    }
+    void DrawLineWithNormal(fvec2 a, fvec2 b, fvec3 color, float alpha = 1) const
+    {
+        DrawLine(a, b, color, alpha);
+        fvec2 center = (a + b) / 2;
+        DrawLine(center, center + (b - a).rot90(-1).norm() * 8, color, alpha);
+    }
+
+    void AddUnfinishedContourToShape()
+    {
+        if (!unfinished_contour.empty())
+        {
+            std::optional<ivec2> prev;
+            for (ivec2 point : unfinished_contour)
+            {
+                if (prev)
+                    shape.AddEdge({.a = *prev, .b = point});
+                prev = point;
+            }
+            shape.AddEdge({.a = prev.value(), .b = unfinished_contour.front()});
+
+            std::cout << Refl::ToString(unfinished_contour) << '\n';
+
+            unfinished_contour.clear();
+        }
+    }
+
+    void Init()
+    {
+        // C
+        // Refl::FromString(unfinished_contour, "[(-70,-65),(21,-81),(35,6),(-58,21),(-44,-4),(10,-12),(1,-59),(-56,-49)]");
+        // O
+        // Refl::FromString(unfinished_contour, "[(-60,-50),(-11,-68),(41,-48),(58,6),(37,51),(-15,67),(-63,49),(-85,0)]");
+        // overhangs
+        Refl::FromString(unfinished_contour, "[(-26,-121),(12,-46),(-9,-40),(10,-6),(-11,-6),(9,28),(-8,23),(7,56),(-6,56),(-17,31),(-34,119),(-100,128),(-102,-128)]");
+
+        AddUnfinishedContourToShape();
+    }
+
+    void Tick()
+    {
+        if (mouse.left.pressed())
+            unfinished_contour.push_back(mouse.pos());
+
+        if (mouse.right.pressed())
+            AddUnfinishedContourToShape();
+    }
+
+    void Render() const
+    {
+        // Test.
+        r.itext(-screen_size/2, Graphics::Text(Fonts::main, FMT("cursor = {}", mouse.pos()))).align(ivec2(-1)).color(fvec3(1));
+
+        { // The shape.
+            bool collides = false;
+            if (unfinished_contour.empty())
+            {
+                auto collider = shape.MakeCollider(mouse.pos());
+                collides = collider.CollidePoint(mouse.pos());
+
+                r.fquad(mouse.pos() + 0.5f, fvec2(32, 1)).center(fvec2(0.5f)).rotate(collider.DebugRayDirection() * f_pi / 2).color(fvec3(0,0,1));
+            }
+
+            r.fquad(shape.Bounds()).color(fvec3(1,1,1)).alpha(0.1f);
+
+            shape.EdgeTree().CollideCustom([](auto &&){return true;}, [&](Shape::EdgeIndex e)
+            {
+                const auto &edge = shape.EdgeTree().GetNodeUserData(e);
+                DrawLineWithNormal(edge.a, edge.b, collides ? fvec3(1,0,1) : fvec3(1,1,1));
+                for (int i = 0; i < 4; i++)
+                    r.itext((edge.a + edge.b) / 2 + ivec2::dir4(i), Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(0,0,0));
+                r.itext((edge.a + edge.b) / 2, Graphics::Text(Fonts::main, FMT("{}", e))).align(ivec2(0)).color(fvec3(1,1,1));
+                return false;
+            });
+        }
+
+        { // Unfinished contour.
+            std::optional<ivec2> prev;
+            for (ivec2 point : unfinished_contour)
+            {
+                if (prev)
+                    DrawLineWithNormal(*prev, point, fvec3(0,1,0));
+                prev = point;
+            }
+            if (prev)
+            {
+                DrawLineWithNormal(*prev, mouse.pos(), mouse.pos() - *prev == any(0) ? fvec3(1,0.5f,0) : fvec3(1,1,0));
+                DrawLineWithNormal(*prev, unfinished_contour.front(), fvec3(1,1,1), 0.3f);
+            }
+        }
+    }
+};
+
 struct Application : Program::DefaultBasicState
 {
-    GameUtils::State::Manager<StateBase> state_manager;
     GameUtils::FpsCounter fps_counter;
+
+    ContourDemo demo;
 
     void Resize()
     {
@@ -49,7 +158,7 @@ struct Application : Program::DefaultBasicState
     void EndFrame() override
     {
         fps_counter.Update();
-        window.SetTitle(STR((window_name), " TPS:", (fps_counter.Tps()), " FPS:", (fps_counter.Fps()), " SOUNDS:", (audio.ActiveSources())));
+        window.SetTitle(STR((window_name), " TPS:", (fps_counter.Tps()), " FPS:", (fps_counter.Fps())));
     }
 
     void Tick() override
@@ -66,8 +175,8 @@ struct Application : Program::DefaultBasicState
         }
 
         gui_controller.PreTick();
-        state_manager.Tick();
-        audio.Tick();
+        demo.Tick();
+        audio_controller.Tick();
 
         Audio::CheckErrors();
     }
@@ -76,7 +185,11 @@ struct Application : Program::DefaultBasicState
     {
         gui_controller.PreRender();
         adaptive_viewport.BeginFrame();
-        state_manager.Call(&StateBase::Render);
+        Graphics::SetClearColor(fvec3(0));
+        Graphics::Clear();
+        r.BindShader();
+        demo.Render();
+        r.Finish();
         adaptive_viewport.FinishFrame();
         gui_controller.PostRender();
         Graphics::CheckErrors();
@@ -87,7 +200,6 @@ struct Application : Program::DefaultBasicState
 
     void Init()
     {
-        // Initialize ImGui.
         ImGui::StyleColorsDark();
 
         { // Load images.
@@ -124,9 +236,7 @@ struct Application : Program::DefaultBasicState
         Graphics::Blending::Enable();
         Graphics::Blending::FuncNormalPre();
 
-        Audio::GlobalData::Load(Audio::mono, Audio::wav, Program::ExeDir() + "assets/sounds/");
-
-        state_manager.SetState("World{}");
+        demo.Init();
     }
 };
 
