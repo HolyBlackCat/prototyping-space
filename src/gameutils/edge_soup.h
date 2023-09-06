@@ -37,8 +37,9 @@ class EdgeSoup
 {
   public:
     using scalar = T;
-    using vector = vec2<T>;
-    using float_vector = Math::floating_point_t<vector>;
+    using float_scalar = Math::floating_point_t<T>;
+    using vector = vec2<scalar>;
+    using float_vector = vec2<float_scalar>;
     using matrix = mat2<T>;
     using rect = rect2<T>;
 
@@ -1164,8 +1165,16 @@ class EdgeSoup
             // The world positions of the start and end of the segment.
             vector world_a, world_b;
 
-            // The primary normal.
+            // The true normal.
             float_vector world_normal;
+
+            // The edges describing this point.
+            EdgeIndex self_edge_index_a = null_edge;
+            EdgeIndex other_edge_index_a = null_edge;
+            // Those can be equal to their `_a` counterparts above, if the whole collision segment is entirely on one edge.
+            // The equality has to be checked separately for self and other.
+            EdgeIndex self_edge_index_b = null_edge;
+            EdgeIndex other_edge_index_b = null_edge;
         };
 
         std::span<Segment> segments;
@@ -1229,6 +1238,7 @@ class EdgeSoup
         struct State
         {
             const EdgeSoup *self = nullptr;
+            const EdgeSoup *other = nullptr;
             Params params;
 
             // Information about each edge.
@@ -1245,9 +1255,10 @@ class EdgeSoup
       public:
         CollisionPointsAccumulator() {}
 
-        CollisionPointsAccumulator(const EdgeSoup &self, Params params)
+        CollisionPointsAccumulator(const EdgeSoup &self, const EdgeSoup &other, Params params)
         {
             state.self = &self;
+            state.other = &other;
             state.params = std::move(params);
             state.edge_entries = state.params.temp_pool->template AllocateArray<EdgeEntry>(state.self->NumSparseEdges());
             state.edges_with_points = {state.params.temp_pool->template AllocateArray<EdgeIndex>(state.self->NumEdges()).data(), 0};
@@ -1272,7 +1283,7 @@ class EdgeSoup
             return state.edge_entries[EdgeIndexToUnderlying(index)];
         }
 
-        // Note, the collider must use the same object as 'self' as was passed to the constructor.
+        // Note, the collider must use the same object as 'self' as the one passed to the constructor.
         void AddPoint(const EdgeSoupCollider::CallbackData &data)
         {
             state.total_num_points++;
@@ -1328,7 +1339,11 @@ class EdgeSoup
 
             // Creates a new collision and returns the index.
             // If `precalculated_normal` is not null, it's used as the normal (as an optimization). Otherwise it's calculated from the points.
-            auto AddNewCollision = [&](const PointDesc &a, const PointDesc &b, const float_vector *precalculated_normal) -> int
+            auto AddNewCollision = [&](
+                EdgeIndex self_edge_index_a, EdgeIndex self_edge_index_b,
+                const PointDesc &a, const PointDesc &b,
+                const float_vector *precalculated_normal
+            ) -> int
             {
                 int index = int(ret.segments.size());
                 ASSERT(index < max_num_collisions);
@@ -1339,6 +1354,11 @@ class EdgeSoup
                 seg.world_a = a.world_pos;
                 seg.world_b = b.world_pos;
                 seg.world_normal = precalculated_normal ? *precalculated_normal : (seg.world_b - seg.world_a).rot90(-1).norm();
+
+                seg.self_edge_index_a = self_edge_index_a;
+                seg.self_edge_index_b = self_edge_index_b;
+                seg.other_edge_index_a = a.other_edge_index;
+                seg.other_edge_index_b = b.other_edge_index;
 
                 return index;
             };
@@ -1383,7 +1403,7 @@ class EdgeSoup
                         if (!edge_entry.points[i].other_enters_self && edge_entry.points[i+1].other_enters_self)
                         {
                             // Create the collision.
-                            AddNewCollision(edge_entry.points[i], edge_entry.points[i+1], &edge_entry.normal);
+                            AddNewCollision(edge_index, edge_index/*again*/, edge_entry.points[i], edge_entry.points[i+1], &edge_entry.normal);
                             i++;
                         }
                     }
@@ -1402,10 +1422,12 @@ class EdgeSoup
                 auto &other_set = search_back ? lone_begin_points : lone_end_points;
 
                 // Grab one of the edges.
-                EdgeIndex cur_edge_index = EdgeIndex(target_set.GetElem(target_set.ElemCount() - 1));
-                target_set.EraseUnordered(EdgeIndexToUnderlying(cur_edge_index));
+                const EdgeIndex target_edge_index = EdgeIndex(target_set.GetElem(target_set.ElemCount() - 1));
+                target_set.EraseUnordered(EdgeIndexToUnderlying(target_edge_index));
 
-                const EdgeEntry &target_edge_entry = state.edge_entries[EdgeIndexToUnderlying(cur_edge_index)];
+                const EdgeEntry &target_edge_entry = state.edge_entries[EdgeIndexToUnderlying(target_edge_index)];
+
+                EdgeIndex cur_edge_index = target_edge_index;
 
                 // Walk the edge loop.
                 while (true)
@@ -1449,11 +1471,52 @@ class EdgeSoup
                     }
 
                     // Success.
-                    AddNewCollision(point_a, point_b, nullptr);
+
+                    EdgeIndex self_edge_index_a = target_edge_index;
+                    EdgeIndex self_edge_index_b = next_edge_index;
+                    if (search_back)
+                        std::swap(self_edge_index_a, self_edge_index_b);
+
+                    AddNewCollision(self_edge_index_a, self_edge_index_b, point_a, point_b, nullptr);
                     break;
                 }
             }
             ret.num_lone_points += lone_begin_points.ElemCount() + lone_end_points.ElemCount();
+
+            return ret;
+        }
+
+        // Find the edge normal closest to `world_normal` and return it.
+        // This ignores the normal directions, and considers them as lines.
+        [[nodiscard]] float_vector GetClosestEdgeNormal(const CollisionData::Segment &seg) const
+        {
+            float_vector ret;
+            float_scalar max_value = 0;
+
+            EdgeIndex edge_indices[4] = {
+                // Don't reorder, we assume the first two to be 'self' below.
+                seg.self_edge_index_a,
+                seg.self_edge_index_b,
+                seg.other_edge_index_a,
+                seg.other_edge_index_b,
+            };
+
+            bool first = true;
+
+            for (int i = 0; i < 4; i++)
+            {
+                EdgeIndex edge_index = edge_indices[i];
+                bool is_self = i < 2;
+                float_vector normal = (is_self ? state.params.self_rot : state.params.other_rot) * state.self->GetEdge(edge_index).normal;
+                float_scalar value = abs(normal /dot/ seg.world_normal);
+                if (first || value > max_value)
+                {
+                    ret = normal;
+                    max_value = value;
+                }
+
+                first = false;
+            }
 
             return ret;
         }

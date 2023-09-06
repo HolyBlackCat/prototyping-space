@@ -127,13 +127,13 @@ struct ContourDemo
 
     void Init()
     {
-        #error TODO: 1. Tests! 2. Handle the literal "corner" cases too. 3. Compute the side normals per each collision.
+        // #error TODO: 1. Tests! 2. Handle the literal "corner" cases too. 3. Compute the side normals per each collision.
 
         self_pos = vector(120, 80);
-        self_matrix = matrix::rotate(to_rad(-60));
+        // self_matrix = matrix::rotate(to_rad(-60));
 
         other_pos = vector(8, 46);
-        // other_matrix = imat2(0,-1,1,0);
+        // other_matrix = imat2(-1,0,0,-1);
         other_matrix = matrix::rotate(to_rad(120));
 
         // C
@@ -149,12 +149,11 @@ struct ContourDemo
         // rod
         // Refl::FromString(unfinished_contour, "[(-3,22),(-24,29),(-33,10),(-14,-124),(-5,-118)]");
 
-        // flipped C
-        Refl::FromString(unfinished_contour, "[(56,-49),(-1,-59),(-10,-12),(44,-4),(58,21),(-35,6),(-21,-81),(70,-65)]");
+        // Refl::FromString(unfinished_contour, "[(-40,-20),(40,-20),(40,20),(20,20),(20,0),(-20,0),(-20,20),(-40,20)]");
+        Refl::FromString(unfinished_contour, "[(-40,-20),(40,-20),(40,20),(20,20),(20,0),(-20,0),(-20,20),(-40,20)]");
         AddUnfinishedContourToShape();
 
-        // O
-        Refl::FromString(unfinished_contour, "[(-60,-50),(-11,-68),(41,-48),(58,6),(37,51),(-15,67),(-63,49),(-85,0)]");
+        Refl::FromString(unfinished_contour, "[(-40,-20),(40,-20),(40,20),(20,20),(20,0),(-20,0),(-20,20),(-40,20)]");
         AddUnfinishedContourToShape(&other_shape);
     }
 
@@ -270,7 +269,7 @@ struct ContourDemo
                     .self_angular_vel_abs_upper_bound = 0,
                     .other_angular_vel_abs_upper_bound = 0,
                 });
-                Shape::CollisionPointsAccumulator accum(shape, Shape::CollisionPointsAccumulator::Params{
+                Shape::CollisionPointsAccumulator accum(shape, other_shape, Shape::CollisionPointsAccumulator::Params{
                     .temp_pool = &temp_pool,
                     .self_rot = self_matrix,
                     .other_rot = other_matrix,
@@ -284,12 +283,20 @@ struct ContourDemo
                 Shape::CollisionData ret = accum.Finalize(persistent_pool);
                 r.ftext(-screen_size / 2, Graphics::Text(Fonts::main, FMT(" \nbad points: {}", ret.num_lone_points))).align(ivec2(-1));
 
+                // Collision segments.
                 for (const auto &seg : ret.segments)
                 {
+                    // Segment.
                     DrawLine(seg.world_a, seg.world_b, fvec3(0,1,0), 1, fvec3(1,0,0));
-                    DrawLine((seg.world_a + seg.world_b) / 2, (seg.world_a + seg.world_b) / 2 + seg.world_normal * 12, fvec3(0.5f,1,0.5f));
+                    // Normal.
+                    fvec2 center = (seg.world_a + seg.world_b) / 2;
+                    DrawLine(center, center + seg.world_normal * 12, fvec3(0.75f,0.75f,0));
+                    // Snapped normal.
+                    fvec2 snapped_normal = accum.GetClosestEdgeNormal(seg);
+                    DrawLine(center, center + snapped_normal * 20, fvec3(1,0,1));
                 }
 
+                // Intersection points.
                 for (auto edge_index : accum.GetEdgesWithPoints())
                 for (const auto &point : accum.GetEdgeEntry(edge_index).points)
                 {
